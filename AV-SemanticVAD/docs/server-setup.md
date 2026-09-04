@@ -26,7 +26,7 @@
 
 | # | 决策 | 原因 |
 |---|---|---|
-| 1 | **LoRA 直接锁 `r=32, α=64`** | 不再需要「按数据量升降档」的条件判断（原计划受单卡 24 GB 限制） |
+| 1 | **LoRA 锁 `r=32, α=64`** | 显存不是约束；**但 ≥30 K 数据要求不变**（那是过拟合约束，见计划单 §0.4） |
 | 2 | **新增臂 C**（相加 + LoRA + **解冻 `vad_lm_head`**） | 作为上界对照，成本极低（只多解冻 H×6 小头） |
 | 3 | **噪声增广改为训练时即时合成** | 省磁盘，且允许更多 augmentation 变体 |
 
@@ -165,82 +165,43 @@ git clone https://github.com/Linyx1125/MM-F2F
 
 ---
 
-## 4. Phase 0 验收清单
+## 4. 环境就绪后做什么
 
-对应计划单 §Phase 0，**这是服务器上要做的第一批事**。
+**任务清单在 [`../plan/implementation-plan.md`](../plan/implementation-plan.md) §Phase 0**
+—— 那里是唯一权威，本文件不复制，避免两份清单打勾状态不一致。
 
-### 4.1 环境与基线复现
+Phase 0 一共三组事，按此顺序：
 
-| ☐ | 任务 | 验收 |
-|---|---|---|
-| ☐ | 0.1.1 环境配置 | `X2-Turn/turn-demo` 跑通 |
-| ☐ | 0.1.2 加载 base | bf16 载入，显存 ≈8 GB |
-| ☐ | 0.1.3 复现帧级输出 | `infer_asr_turn` 输出 80 ms/帧；3.4 s 音频 ≈53 帧 |
-| ☐ | 0.1.4 固化 golden | `tests/golden/backbone.json` |
+| 顺序 | 组 | 计划单章节 | 性质 |
+|---|---|---|---|
+| 1 | 解锁 V1/V2/V3/V7 | **§P0.1** | **纯读取，最快，先做** |
+| 2 | 环境与基线复现 | **§P0.2** | 跑通 `turn-demo` + 固化 golden |
+| 3 | **探针 A / 探针 B** | **§P0.3 / §P0.4** | **两个 AUC 数字决定整篇论文的 framing** |
 
-### 4.2 解锁待核实项（**纯读取，最先做**）
-
-| ☐ | 项 | 方法 |
-|---|---|---|
-| ☐ | **V1** `hidden_size`/`vocab_size`/层数 | 读 `config.json` |
-| ☐ | **V2** id 41+ 是否空闲 | 查 Tekken 词表 41–50 |
-| ☐ | **V3** decoder layer 0 模块路径 | `print(model)` |
-| ☐ | **V7** turn head 是否吃 delay tokens | 对比不同 `delay_ms` 下 turn 帧时序 |
-
-### 4.3 ★ 两个探针（决定论文 framing）
-
-| ☐ | 探针 | 判据 |
-|---|---|---|
-| ☐ | **A**：X2-Turn hidden 线性探针 → complete/incomplete | **>0.85 → 必须改走分层汇报**；0.70–0.85 按主线；<0.70 考虑加大 LoRA |
-| ☐ | **B**：MediaPipe 24 维 → 小 GRU → complete/incomplete | **>0.62 核心卖点**；0.55–0.62 定位噪声鲁棒；≈0.50 转 negative result |
-
-**Gate（W2）**：两个 AUC 数字出炉（无论结果如何）；V1/V2/V3 有明确答案。
-
-> **不要跳过探针直接训练。** 若探针 A 已达 0.90+，视觉可捞空间极小
-> （参照 Kurata'23 的 +3.0 是建立在 wav2vec2-base 弱基线上的，见 `plan/architecture.md` §B.1）。
+> ### ⚠️ 不要跳过探针直接训练
+>
+> 现有全部证据都指向「视觉增益来自噪声鲁棒性，不来自语义判断」。
+> 若**探针 A**（X2-Turn hidden 线性探针）已达 **0.90+**，说明音频基线太强、
+> 视觉可捞空间极小，**必须先切换论文 framing 再投入训练**。
+>
+> Kurata'23 的 +3.0 是建立在 wav2vec2-base（AUC 0.887）这一**弱基线**上的，
+> **不能当作我们的预期值**（见 [`../plan/architecture.md`](../plan/architecture.md) §B.1）。
+>
+> 两个探针都**不需要**训练循环、LoRA、标注数据，CPU 分钟级即可出数字。
 
 ---
 
-## 5. 关键代码锚点（服务器上要读的文件）
+## 5. 关键代码位置
 
-### X2-Turn（base）
+**见 [`code-anchors.md`](code-anchors.md)** —— 那里是代码位置的唯一权威来源，
+本文件不重复列举，避免两处不一致。
 
-| 内容 | 位置 |
-|---|---|
-| `VoxtralMTP` 双头结构 | `X2-Turn/.../transformers/modeling.py:15-69,114-188` |
-| 检查点加载 | 同文件 `:228-264` |
-| `TURN_CLASS_IDS`（id 35–40） | `X2-Turn/.../inference.py:86` |
-| hidden 读取偏移 `prefix_length + i − 1` | `X2-Turn/.../inference.py:165` |
-| 冻结开关 `train_vad_head_only` | `modeling.py` |
-| 规则控制器注入点 | `server.py:102, 115-120` |
+最常用的两条先记住：
 
-### SoulX-Duplug（范式 · 推理侧）
-
-| 内容 | 位置 |
-|---|---|
-| `EncoderProjector` | `SoulX-Duplug/model/model.py:17-35` |
-| `token_samples = int(0.08 * 16000)` | `model/model.py:50` |
-| WhisperVQ 冻结加载 | `model/model.py:53-58` |
-| projector freeze 开关 | `model/model.py:60-71` |
-| `forward()` audio/text embedding 混合 | `model/model.py:145-166` |
-| **complete/incomplete 判决** | **`service/model.py:708-733`** |
-| 状态 token id | `config/config.py:27-35` |
-| 远场 RMS 门控 | `service/model.py:252-256` |
-
-### ★ SoulX-Duplug-training（范式 · 训练侧，Phase 3 必读）
-
-| 内容 | 位置 | 为什么要读 |
+| | 值 | 写错的后果 |
 |---|---|---|
-| **训练入口** | `SoulX-Duplug-training/finetune.py` | 同范式同任务的训练循环，写 Trainer 前必读 |
-| **数据格式样例** | `SoulX-Duplug-training/example_data_fisher.jsonl` | **官方 jsonl 格式**，Phase 1.6 字段设计应对照它，降低返工 |
-| 启动参数 | `launch.sh` | lr / batch / 阶段划分的实际取值 |
-| EMA 实现 | `utils/ema/`（三种：原生 / lightning / nemo） | 若需 EMA 可直接借 |
-| 数据调度 | `utils/epoch_shuffle.py`、`utils/dynamic_train.py` | 变长样本的组批策略 |
-| 学习率调度 | `utils/sparkvox/utils/scheduler.py` | — |
-| 权重导出 | `scripts/export_weights.py` | Phase 3 出 checkpoint 时参考 |
-
-> **Phase 3.5.1 的建议顺序**：先读 `example_data_fisher.jsonl` 定字段 →
-> 再读 `finetune.py` 定训练循环 → 最后才动手写 `avsvad/train/trainer.py`。
+| 帧长 | **80 ms**（12.5 Hz） | 视听对齐全错 |
+| hidden 偏移 | **`prefix_length + i − 1`**（`X2-Turn/.../inference.py:165`） | 全局 80 ms 偏差，**表现为「视觉略有帮助」，极难察觉** |
 
 ---
 
