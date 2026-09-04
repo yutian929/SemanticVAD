@@ -72,18 +72,26 @@
 
 ## 4. 下一步做什么（Phase 0，约 2 周）
 
-### 第一批（§P0.1）：解锁待核实项 —— 纯读取，最快，先做这个
+### 第一批（§P0.1）：V1 + V2 —— 无依赖，第一天就能做完
 
-这四项决定了后续代码怎么写，**不做就无法开工**：
+**只需下载两个小文件，不需要环境、不需要完整权重**：
+
+```bash
+huggingface-cli download x-square-robot/X2-Turn-4B-0812 \
+    --include "config.json" "tekken.json" \
+    --local-dir /tmp/x2turn-meta
+```
 
 | 项 | 要查什么 | 怎么查 | 影响 |
 |---|---|---|---|
-| **V1** | `hidden_size` / `vocab_size` / 层数 | 读权重的 `config.json` | Projector 与 LoRA 参数量定档 |
-| **V2** | **token id 41+ 是否空闲** | 查 Tekken 词表 41–50 | 决定 ci 头能否零参数（方案 H-A） |
-| **V3** | decoder layer 0 的模块路径 | `print(model)` | 视觉注入的 hook 挂点 |
-| **V7** | turn head 是否吃 delay tokens | 对比不同 `delay_ms` 下 turn 帧时序 | 视觉前视约束能否放松 |
+| **V1** | `hidden_size` / `vocab_size` / 层数 | 读 `config.json` | Projector 与 LoRA 参数量定档 |
+| **V2** ★ | **token id 41+ 是否空闲** | 查 `tekken.json` 词表 41–50 | 决定 ci 头能否**零参数**（方案 H-A）；不成立则退 H-B |
 
-### 第二批（§P0.2）：环境与基线复现
+> ⚠️ **V3 和 V7 不在这一批** —— 它们需要模型已载入（`print(model)`）
+> 或能跑推理（对比 `delay_ms`），因此归在第二批的 §P0.2.5 / §P0.2.6。
+> 别被「待核实项」这个共同标签误导成可以一起做完。
+
+### 第二批（§P0.2）：环境、基线复现，以及 V3 / V7
 
 ```bash
 cd X2-Turn && bash install.sh          # 上游自带安装脚本
@@ -91,7 +99,8 @@ cd X2-Turn && bash install.sh          # 上游自带安装脚本
 ```
 
 验收：`turn-demo` 跑通；`infer_asr_turn` 输出 **80 ms/帧**（3.4 s 音频 ≈53 帧）；
-固化 golden 到 `tests/golden/backbone.json`。
+固化 golden 到 `tests/golden/backbone.json`；**并顺带解锁 V3（§P0.2.5）与 V7（§P0.2.6）**
+—— 此时模型已在手，正是查它们的时候。
 
 ### 第三批（§P0.3 / §P0.4）：★★ 两个探针 —— 这是 Phase 0 的真正目的
 
@@ -103,7 +112,19 @@ cd X2-Turn && bash install.sh          # 上游自带安装脚本
 **两个探针都不需要**训练循环、LoRA、视觉分支、人工标注数据。
 用 ~1 K 条弱标注样本即可，CPU 分钟级出结果。
 
-**判据（直接决定论文怎么写）**：
+> ### ⚠️ 探针 A 有个已知拦路石（已核实代码，别自己撞）
+>
+> **`inference.py` 的 `infer_asr_turn()` 拿不到 hidden** —— 它只返回 `output.vad_logits`。
+> `hidden_states` 仅存在于 `modeling.py` 内部（`:128,139,160,163`）。
+>
+> **推荐做法**：对 `model.base_model.model(...)` 单独前向，取 `outputs.last_hidden_state`
+> （这正是 `modeling.py:127-128` 自己的做法）。
+> 逐帧索引用 `prefix_length + frame_index − 1`。
+>
+> 完整说明与另两个备选做法见 `plan/implementation-plan.md` §P0.3。
+> **不要为此修改 `X2-Turn/` 里的代码**（只读约定），做法是「调用」不是「改」。
+
+**判据（直接决定论文怎么写，务必看数字不要跳过）**：
 
 | 探针 A 的 AUC | 含义 | 行动 |
 |---|---|---|

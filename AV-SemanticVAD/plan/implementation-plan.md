@@ -190,20 +190,39 @@ W24 ─── 投稿（含 3 周缓冲）
 > **⚠️ 本节章节号用 `P0.x` 前缀**，以区别于第 0 部分概览的 `§0.x`。
 > 引用时请写全，例如「见 §P0.3」而非「见 §0.3」。
 
-**执行顺序**：`P0.1`（纯读取，最快）→ `P0.2`（环境）→ `P0.3`/`P0.4`（两个探针，本 Phase 的真正目的）。
+**执行顺序**（★ 注意依赖关系，不能只按编号）：
 
-## P0.1 解锁待核实项（**纯读取，最先做**）
+```
+P0.1  V1 + V2          ← 无依赖，只需下 2 个小文件，5 分钟
+  ↓
+P0.2  环境 + 基线 + V3 + V7   ← V3/V7 必须模型能载入/能跑推理，故归在此
+  ↓
+P0.3  探针 A     P0.4  探针 B    ← 本 Phase 的真正目的
+```
 
-这四项决定后续代码怎么写，不做无法开工。
+> **⚠️ 待核实项被拆成两处，这是刻意的**：
+> V1/V2 只读配置文件，**不需要环境和完整权重**，第一天就能做完；
+> **V3 需要 `print(model)`、V7 需要跑推理**，两者都依赖 P0.2 的环境就绪。
+> 把它们放在一起会造成「纯读取」的错觉，实际会卡住。
+
+## P0.1 无依赖的待核实项（**第一天即可完成**）
+
+只需从 HF 下载两个小文件，**不需要环境、不需要完整权重**：
+
+```bash
+huggingface-cli download x-square-robot/X2-Turn-4B-0812 \
+    --include "config.json" "tekken.json" \
+    --local-dir /tmp/x2turn-meta
+```
 
 | ☐ | 项 | 方法 | 影响 |
 |---|---|---|---|
 | ☐ | **V1** `hidden_size`/`vocab_size`/层数 | 读 `config.json` | Projector 与 LoRA 参数量定档 |
-| ☐ | **V2** id 41+ 是否空闲 | 查 Tekken 词表 41–50 | H-A 零参数方案成立与否 |
-| ☐ | **V3** decoder layer 0 模块路径 | `print(model)` | 相加注入的 hook 挂点 |
-| ☐ | **V7** turn head 是否吃 delay tokens | 对比不同 `delay_ms` 下 turn 帧时序 | 视觉前视约束能否放松到 80 ms |
+| ☐ | **V2** id 41+ 是否空闲 | 查 `tekken.json` 词表 41–50 | **H-A 零参数方案成立与否；不成立则退 H-B（+6 K）** |
 
-## P0.2 环境与基线复现
+**V2 是这两项里更重要的**：它决定 ci 头能否复用 `vad_lm_head` 而零新增参数（方案 H-A，见 §2.4）。
+
+## P0.2 环境、基线复现，以及需要模型在手的待核实项
 
 | ☐ | 任务 | 交付物 | 验收 |
 |---|---|---|---|
@@ -211,6 +230,8 @@ W24 ─── 投稿（含 3 周缓冲）
 | ☐ | P0.2.2 加载 base | `load_mtp_checkpoint("x-square-robot/X2-Turn-4B-0812")` | bf16 载入成功，显存 ≈8 GB |
 | ☐ | P0.2.3 复现帧级输出 | `scripts/run_backbone.py` | `infer_asr_turn` 输出 80 ms/帧；3.4 s 音频 ≈53 帧 |
 | ☐ | P0.2.4 固化 golden | `tests/golden/backbone.json` | 固定样本的 turn_frames 序列，后续改动的回归基线 |
+| ☐ | **P0.2.5 解锁 V3** | decoder layer 0 的模块路径 | `print(model)` 后确认 hook 挂点（**需模型已载入**） |
+| ☐ | **P0.2.6 解锁 V7** | turn head 是否吃 delay tokens | 对比不同 `delay_ms` 下 turn 帧时序（**需能跑推理**）；决定视觉前视约束能否放松到 80 ms |
 
 ## P0.3 ★ 探针 A：X2-Turn 的 hidden 里已有多少完整性信息？
 
@@ -960,11 +981,11 @@ SemanticVAD/                  ← git root
 |---|---|---|---|
 | V1 | `hidden_size`/`vocab_size`/层数 | ⬜ | Phase P0.1 |
 | V2 | id 41+ 是否空闲 | ⬜ | Phase P0.1 |
-| V3 | decoder layer 0 模块路径 | ⬜ | Phase P0.1 |
+| V3 | decoder layer 0 模块路径 | ⬜ | Phase P0.2.5（需模型已载入）|
 | V4 | `−1` 偏移语义 | ⬜ | Phase 2.7 单测 |
 | V5 | batch>1 与变长 padding | ⬜ | Phase 3.4 |
 | V6 | 两趟推理能否合并 | ⬜ | Phase 5.1 |
-| V7 | turn head 是否吃 delay tokens | ⬜ | Phase P0.1 |
+| V7 | turn head 是否吃 delay tokens | ⬜ | Phase P0.2.6（需能跑推理）|
 | V8 | LoRA 是否伤 ASR | ⬜ | Phase 3.5.6 WER 门禁 |
 | **V9** | **Qwen3.5-Omni 粒度与规模** | ✅ **已解决** | arch §2.3.1：权重仅 API / 数千亿参数 / 视觉非流式 / 视频 1 FPS |
 | V10 | Qwen2.5-Omni-3B vision tower 许可与可加载性 | ⬜ | Phase 4.5.2（⚠️ 只能用 2.5 版，3.5 权重不开放） |
