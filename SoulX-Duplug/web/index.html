@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SoulX-Duplug · 实时状态可视化</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">SoulX</span>
+      <span class="brand-sub">Duplug · 流式语义 VAD 可视化（纯客户端）</span>
+    </div>
+
+    <div class="conn">
+      <label class="field">
+        <span>服务地址</span>
+        <input id="serverUrl" type="text" spellcheck="false" placeholder="ws://localhost:8000/turn">
+      </label>
+      <label class="field">
+        <span>Session</span>
+        <input id="sessionId" type="text" spellcheck="false">
+      </label>
+      <div class="status-pill" id="connPill">
+        <i class="dot"></i><span id="connText">未连接</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- ============ 左列 ============ -->
+    <section class="col">
+      <div class="card state-card" id="stateCard" data-state="none">
+        <div class="state-ring">
+          <div class="state-ring-inner">
+            <div class="state-name" id="stateName">--</div>
+            <div class="state-en" id="stateEn">等待开始</div>
+          </div>
+          <div class="pulse"></div>
+        </div>
+        <div class="state-desc" id="stateDesc">点击下方「开始」授权麦克风后，服务端会每 160ms 返回一次对话状态。</div>
+
+        <div class="legend">
+          <span class="lg" data-s="idle"><i></i>idle 无语义</span>
+          <span class="lg" data-s="nonidle"><i></i>nonidle 说话中</span>
+          <span class="lg" data-s="speak"><i></i>speak 可接话</span>
+          <span class="lg" data-s="blank"><i></i>blank 缓存中</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>麦克风输入</h2>
+          <span class="tag" id="rateTag">--</span>
+        </div>
+        <canvas id="waveCanvas"></canvas>
+        <div class="meter"><div class="meter-fill" id="meterFill"></div></div>
+        <div class="meter-label">
+          <span>音量</span>
+          <span id="rmsText">-∞ dB</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>状态时间轴</h2><span class="tag">最近 ~48s</span></div>
+        <canvas id="timelineCanvas"></canvas>
+      </div>
+
+      <div class="card controls">
+        <button id="btnStart" class="btn btn-primary">开始</button>
+        <button id="btnStop" class="btn" disabled>停止</button>
+        <button id="btnReset" class="btn btn-ghost">重置会话</button>
+        <select id="micSelect" class="select" title="麦克风设备"></select>
+      </div>
+    </section>
+
+    <!-- ============ 右列 ============ -->
+    <section class="col">
+      <div class="card">
+        <div class="card-head"><h2>实时识别</h2></div>
+        <div class="asr-block">
+          <div class="asr-label">当前分块 <code>asr_segment</code></div>
+          <div class="asr-text small" id="asrSegment">—</div>
+        </div>
+        <div class="asr-block">
+          <div class="asr-label">近 3.2s <code>asr_buffer</code></div>
+          <div class="asr-text" id="asrBuffer">—</div>
+        </div>
+      </div>
+
+      <div class="card grow">
+        <div class="card-head">
+          <h2>整轮转写</h2>
+          <span class="tag" id="turnTag">0 轮</span>
+        </div>
+        <ul class="turns" id="turnList">
+          <li class="empty">尚无完整轮次（状态变为 <b>speak</b> 时产出）</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>运行统计</h2></div>
+        <div class="stats">
+          <div class="stat"><span class="k">已发送分块</span><span class="v" id="stSent">0</span></div>
+          <div class="stat"><span class="k">已接收状态</span><span class="v" id="stRecv">0</span></div>
+          <div class="stat"><span class="k">往返延迟</span><span class="v" id="stRtt">-- ms</span></div>
+          <div class="stat"><span class="k">录音时长</span><span class="v" id="stDur">0.0 s</span></div>
+          <div class="stat"><span class="k">idle 占比</span><span class="v" id="stIdle">--</span></div>
+          <div class="stat"><span class="k">采样率</span><span class="v" id="stRate">--</span></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>日志</h2>
+          <button id="btnClearLog" class="btn btn-mini">清空</button>
+        </div>
+        <div class="log" id="log"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

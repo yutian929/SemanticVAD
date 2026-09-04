@@ -1,0 +1,74 @@
+# SoulX-Duplug 推理最小依赖
+# 依据全仓库 import 扫描得出，不含训练/评测/UI/vllm 相关包。
+#
+# 安装顺序（重要）：
+#   1) conda install -c conda-forge pynini=2.1.5      # WeTextProcessing 的依赖，pip 装需编译 OpenFst，极易失败
+#   2) 安装 torch：
+#      pip install torch==2.6.0 torchaudio==2.6.0 \
+#        --index-url https://download.pytorch.org/whl/cu124 \
+#        --extra-index-url https://mirrors.aliyun.com/pypi/simple/
+#   3) pip install -r requirements-inference.txt -i https://mirrors.aliyun.com/pypi/simple/
+#
+# torch / torchaudio 故意不写在本文件中，请按上面第 2 步单独安装以匹配本机 CUDA 版本。
+
+# ---- 构建/运行时基础 ----
+# 必须 <81：setuptools 81 起弃用 pkg_resources，84 已移除，
+# 而 modelscope/utils/plugins.py 仍在 import pkg_resources。
+# conda 默认会装 84.x，需显式降级。
+setuptools==78.1.1
+
+
+# ---- 深度学习框架与模型加载 ----
+transformers==4.52.1
+pytorch-lightning==2.5.2
+peft==0.16.0
+accelerate==1.9.0
+safetensors==0.4.5
+sentencepiece==0.2.0
+tokenizers==0.21.4
+numpy==1.26.4
+
+# ---- 配置 ----
+omegaconf==2.3.0
+PyYAML==6.0.2
+
+# ---- Web 服务（server.py / run.sh）----
+fastapi==0.115.3
+uvicorn==0.32.0
+websockets==12.0
+python-multipart==0.0.12
+
+# ---- 客户端脚本（test.py / example_client.py）----
+websocket-client==1.8.0
+
+# ---- 音频 IO 与重采样 ----
+soxr==0.5.0.post1
+soundfile==0.12.1
+librosa==0.10.2
+
+# ---- 中文文本正则化（utils/MyTn）----
+pypinyin==0.55.0
+zhon==2.1.1
+cn2an==0.5.23
+WeTextProcessing==1.0.3
+
+# ---- 级联 ASR ----
+# config/config.yaml 中 infer_config.asr.model_name 决定用哪条链，二者只需其一：
+#   sensevoice  -> funasr（导入链短，推荐）
+#   paraformer  -> modelscope（pipelines 是通用框架，会连带 PIL/opencv/pandas 等图像依赖）
+funasr==1.2.6
+
+modelscope==1.28.2
+addict==2.4.0
+datasets==3.1.0
+simplejson==3.20.1
+sortedcontainers==2.4.0
+# 以下为 modelscope.pipelines 导入链所需，若用 sensevoice 可全部省略
+pillow==10.4.0
+opencv-python-headless==4.11.0.86
+scipy==1.15.3
+pandas==2.3.1
+oss2==2.19.1
+aliyun-python-sdk-core==2.16.0
+crcmod==1.7
+einops==0.8.1

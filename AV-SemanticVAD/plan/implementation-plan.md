@@ -603,9 +603,19 @@ S3  额外解冻 vad_lm_head，以 1/10 lr 微调                   ← 臂 C �
       必过 WER 门禁；且须单独量化原生 6 类话轮的漂移
 ```
 
-**参考实现**：SoulX 官方上游 **`training-code` 分支**
-（`git remote add upstream https://github.com/Soul-AILab/SoulX-Duplug.git && git fetch upstream`）。
-这是同任务同范式的训练循环，写 Trainer 前先读它。
+**参考实现已在库内**：`SoulX-Duplug-training/`（上游 `training-code` 分支 `@928b065`）。
+
+**写 Trainer 前的建议顺序**：
+
+| 顺序 | 读什么 | 目的 |
+|---|---|---|
+| 1 | `SoulX-Duplug-training/example_data_fisher.jsonl` | **官方数据格式**，对照它定 §1.6 字段，避免格式返工 |
+| 2 | `SoulX-Duplug-training/finetune.py` | 同范式同任务的训练循环 |
+| 3 | `SoulX-Duplug-training/launch.sh` | lr / batch / 阶段划分的实际取值 |
+| 4 | 才动手写 `avsvad/train/trainer.py` | — |
+
+可选借用：`utils/ema/`（EMA 三种实现）、`utils/epoch_shuffle.py`（变长组批）、
+`scripts/export_weights.py`（权重导出）。
 
 ## 3.2 损失
 
@@ -912,14 +922,19 @@ AV-SemanticVAD/
 
 ```
 SemanticVAD/                  ← git root
+├── THIRD_PARTY.md            ← 第三方溯源清单（SHA / 许可 / 只读约定）
 ├── AV-SemanticVAD/           ← 本项目（上面的树）
-├── X2-Turn/                  ← submodule，base 权重来源，只读
-└── SoulX-Duplug/             ← submodule，范式参考
-                                 （upstream/training-code 分支 = Phase 3 参考）
+├── X2-Turn/                  ← 只读，base 权重来源            @53d3b9a
+├── SoulX-Duplug/             ← 只读，范式参考（推理服务）      main @45bd237
+└── SoulX-Duplug-training/    ← 只读，★ 训练代码参考   training-code @928b065
 ```
 
-服务器上一条命令拉齐：`git clone --recurse-submodules <地址>`，
-后续步骤见 [`../docs/server-setup.md`](../docs/server-setup.md)。
+**三份第三方代码已直接纳入仓库，不用 submodule** ——
+服务器上 `git clone <地址>` 一条命令拉齐，后续见 [`../docs/server-setup.md`](../docs/server-setup.md)。
+
+> ⚠️ `SoulX-Duplug/` 与 `SoulX-Duplug-training/` **是互补的两棵树，不是包含关系**：
+> 前者含 `service/model.py`（complete/incomplete 判决实现），
+> 后者含 `finetune.py` 与 `example_data_fisher.jsonl`（训练循环与数据格式）。
 
 ---
 

@@ -1,0 +1,8 @@
+# Deps for stream_client.py (runs on YOUR machine, not the GPU server).
+# The server itself does not need these; it only needs the x2-turn env.
+numpy>=1.24
+rich>=13.0
+websocket-client>=1.6
+soundfile>=0.12        # WAV decode
+soxr>=0.3              # resample non-16k audio
+sounddevice>=0.4       # ONLY needed for --mic (live microphone capture)

@@ -50,25 +50,21 @@ HF `Trainer` 会自动处理，无需改代码。
 
 ---
 
-## 1. 克隆与子模块
+## 1. 克隆
 
 ```bash
-git clone --recurse-submodules https://github.com/yutian929/SemanticVAD.git
+git clone https://github.com/yutian929/SemanticVAD.git
 cd SemanticVAD
 ```
 
-**已在本地演练验证**（2026-09-04）：该命令会自动检出两个子模块的正确提交，
-无需再跑 `git submodule update`。克隆后约 **9.3 MB**。
+**一条命令即可 —— 没有子模块。** 三份第三方代码（`X2-Turn/`、`SoulX-Duplug/`、
+`SoulX-Duplug-training/`）已直接纳入仓库，克隆后约 12 MB（权重不在库内）。
 
-若忘了 `--recurse-submodules`（子模块目录会是空的）：
-
-```bash
-git submodule update --init --recursive
-```
+溯源信息（来源 SHA / 许可 / 只读约定）见 [`../../THIRD_PARTY.md`](../../THIRD_PARTY.md)。
 
 ### 1.1 私有仓库的凭据
 
-三个仓库（父 + 两个 fork）若为 private，服务器上需配一次凭据。
+仓库若为 private，服务器上需配一次凭据（**只需配这一个仓库**）。
 **推荐用 PAT + credential store**，避免每次输入：
 
 ```bash
@@ -86,27 +82,23 @@ cat ~/.ssh/id_ed25519.pub     # 复制到 https://github.com/settings/keys
 git config --global url."git@github.com:".insteadOf "https://github.com/"
 ```
 
-### 1.2 ★ 恢复 SoulX 官方上游（必做）
+### 1.2 三个第三方目录一律只读
 
-子模块只记录 `origin`（我们的 fork）。
-**官方上游的 `training-code` 分支是 Phase 3 写 Trainer 的直接参考**，必须手动加回：
+| 目录 | 内容 | 版本 |
+|---|---|---|
+| `X2-Turn/` | base 权重来源 | `@53d3b9a` (2026-08-31) |
+| `SoulX-Duplug/` | 范式参考（**推理服务**） | `main @45bd237` |
+| **`SoulX-Duplug-training/`** | **训练代码参考** | `training-code @928b065` |
 
-```bash
-cd SoulX-Duplug
-git remote add upstream https://github.com/Soul-AILab/SoulX-Duplug.git
-git fetch upstream
-git branch -r | grep upstream     # 应看到 upstream/training-code
-cd ..
-```
+> ⚠️ **后两者不是包含关系，是互补的两棵树。**
+> 上游把推理和训练放在不同分支上：`main` 有 `service/model.py`（含 complete/incomplete 判决），
+> `training-code` 删掉了它但加入了 `finetune.py`、`utils/ema/` 等训练工具。
 
-**X2-Turn 的真上游**（fork 落后 X-Square-Robot 时同步用）：
+我们的改造走**包装**不 fork：新增代码全在 `AV-SemanticVAD/avsvad/` 下，
+经 `avsvad/upstream.py` 引用上游模块。**不要在上述三个目录内改代码**，
+否则将无法在论文里声明「未修改基座代码」，也无法与上游做 diff。
 
-```bash
-cd X2-Turn
-git remote add upstream https://github.com/X-Square-Robot/X2-Turn.git
-git fetch upstream
-cd ..
-```
+对比/更新上游的方法见 [`../../THIRD_PARTY.md`](../../THIRD_PARTY.md) §4。
 
 ---
 
@@ -222,15 +214,33 @@ git clone https://github.com/Linyx1125/MM-F2F
 | 冻结开关 `train_vad_head_only` | `modeling.py` |
 | 规则控制器注入点 | `server.py:102, 115-120` |
 
-### SoulX-Duplug（范式）
+### SoulX-Duplug（范式 · 推理侧）
 
 | 内容 | 位置 |
 |---|---|
 | `EncoderProjector` | `SoulX-Duplug/model/model.py:17-35` |
+| `token_samples = int(0.08 * 16000)` | `model/model.py:50` |
 | WhisperVQ 冻结加载 | `model/model.py:53-58` |
 | projector freeze 开关 | `model/model.py:60-71` |
-| complete/incomplete 判决 | `service/model.py:708-733` |
-| **训练循环** | **`upstream/training-code` 分支** |
+| `forward()` audio/text embedding 混合 | `model/model.py:145-166` |
+| **complete/incomplete 判决** | **`service/model.py:708-733`** |
+| 状态 token id | `config/config.py:27-35` |
+| 远场 RMS 门控 | `service/model.py:252-256` |
+
+### ★ SoulX-Duplug-training（范式 · 训练侧，Phase 3 必读）
+
+| 内容 | 位置 | 为什么要读 |
+|---|---|---|
+| **训练入口** | `SoulX-Duplug-training/finetune.py` | 同范式同任务的训练循环，写 Trainer 前必读 |
+| **数据格式样例** | `SoulX-Duplug-training/example_data_fisher.jsonl` | **官方 jsonl 格式**，Phase 1.6 字段设计应对照它，降低返工 |
+| 启动参数 | `launch.sh` | lr / batch / 阶段划分的实际取值 |
+| EMA 实现 | `utils/ema/`（三种：原生 / lightning / nemo） | 若需 EMA 可直接借 |
+| 数据调度 | `utils/epoch_shuffle.py`、`utils/dynamic_train.py` | 变长样本的组批策略 |
+| 学习率调度 | `utils/sparkvox/utils/scheduler.py` | — |
+| 权重导出 | `scripts/export_weights.py` | Phase 3 出 checkpoint 时参考 |
+
+> **Phase 3.5.1 的建议顺序**：先读 `example_data_fisher.jsonl` 定字段 →
+> 再读 `finetune.py` 定训练循环 → 最后才动手写 `avsvad/train/trainer.py`。
 
 ---
 
@@ -241,5 +251,6 @@ git clone https://github.com/Linyx1125/MM-F2F
 | **帧对齐错 1 帧** | = 全局 80 ms 系统性偏差，且表现为「视觉略有帮助」，**极难察觉**。必须写脉冲响应单测（计划单 §2.7） |
 | **`−1` 偏移** | `hidden_states[prefix_length + i − 1]`，next-token 语义，写错则全局错位（V4） |
 | `mediapipe` 缺 `libgl1` | `apt-get install -y libgl1 libglib2.0-0` |
-| SoulX 子模块无 upstream | 克隆后需手动 `git remote add upstream`（§1） |
+| **误改第三方目录** | 三个目录已删内层 `.git`，改了之后**不会有任何 git 提示**，且与上游 diff 会永久混入我们的改动。改造一律走 `avsvad/` 包装（§1.2） |
+| **误以为 training 是 main 的子集** | 两者是**互补的两棵树**，`main` 有推理代码、`training-code` 有训练代码，缺一不可（§1.2） |
 | HF 下载慢 | `export HF_ENDPOINT=https://hf-mirror.com` |

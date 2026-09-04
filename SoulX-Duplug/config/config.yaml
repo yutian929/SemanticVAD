@@ -1,0 +1,39 @@
+model_config:
+  task: state_prediction
+
+  glm_tokenizer_path: pretrained_models/glm-4-voice-tokenizer
+  enable_lora: true
+  lora_r: 32
+  lora_alpha: 64
+
+  model_name: pretrained_models/Qwen3-0.6B-expand_vocab_v2
+  llm_dim: 1024
+  init_ckpt_path_lora: pretrained_models/SoulX-Duplug/SoulX-Duplug-0.6B-Bilingual.pth
+
+infer_config:
+  seed: 42
+  # auto: 自动选择 cuda > mps > cpu；也可显式写 cuda / mps / cpu
+  device: auto
+  precision: bf16
+  # patience after the model judged <|user_incomplete|>: value x 160ms
+  # 8 -> 1.28s, 12 -> 1.92s. Larger = wait longer before falling back to speak.
+  max_wait_num: 10
+  max_mistake_num: 3
+  # bias added to the incomplete logit when deciding complete vs incomplete.
+  # > 0 conservative (harder to take the turn), < 0 eager (replies sooner).
+  # Enable developer_mode to print the two logits and pick a value.
+  complete_bias: 1.0
+  far_field_threshold: 0.02
+  developer_mode: true
+
+  input:
+    chunk_size: 2560
+    audio_back_size: 15360
+    audio_ahead_size: 640
+    sample_rate: 16000
+
+  asr:
+    # macOS 上推荐 sensevoice：依赖链短，且不需要 modelscope 的图像相关依赖
+    model_name: sensevoice
+    language: auto
+    # model_name: paraformer

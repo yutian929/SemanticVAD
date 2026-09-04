@@ -1,0 +1,72 @@
+model_config:
+  task: state_prediction
+  glm_tokenizer_path: pretrained_models/glm-4-voice-tokenizer
+  model_name: pretrained_models/Qwen3-0.6B-expand_vocab_v2
+  llm_dim: 1024
+  lm_vocab_size: 151936
+  enable_projector: true
+  freeze_projector: false
+
+  # init_ckpt_path: 
+
+  enable_lora: true
+  lora_r: 32
+  lora_alpha: 64
+  lora_dropout: 0.1
+
+
+dataset_config:
+  train_data_path: 
+  batch_size: 1
+  split_size: 0.02
+
+
+train_config:
+  stage: train
+  # total_epochs: 2
+  total_steps: 1800
+
+  learning_rate: 1e-4
+  min_lr: 1e-6
+  warmup_steps: 200
+  anneal_steps: 100000
+
+  log_every_n_steps: 5
+  val_check_interval: 1000
+  accumulate_grad_batches: 72
+
+  num_gpu_per_node: 8
+  num_node: 1
+
+  enable_ema: false
+  ema_dacay: 0.9
+  ema_every_n_steps: 1
+  ema_start_step: 2000
+
+  text_loss_rate: 0.45
+  eos_loss_rate: 0.08
+  idle_loss_rate: 0.08
+  nonidle_loss_rate: 0.09
+  user_complete_loss_rate: 0.24
+  user_incomplete_loss_rate: 0.13
+  user_backchannel_loss_rate: 0.006
+
+  enable_switch_loss_rate: true
+  switch_loss_rate_label: fe
+
+  text_loss_rate_switched: 0.45
+  eos_loss_rate_switched: 0.05
+  idle_loss_rate_switched: 0.08
+  nonidle_loss_rate_switched: 0.09
+  user_complete_loss_rate_switched: 0.26
+  user_incomplete_loss_rate_switched: 0.01
+  user_backchannel_loss_rate_switched: 0.006
+
+  strategy: ddp
+  precision: 16-mixed
+  # strategy: deepspeed_stage_2
+  # precision: 16
+
+  wandb_run_name: run1
+  wandb_save_dir: debug_logs/
+  default_root_dir: ckpt/run1
