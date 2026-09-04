@@ -154,7 +154,7 @@ cd X2-Turn && bash install.sh          # 上游自带安装脚本
 | 坑 | 说明 |
 |---|---|
 | **帧对齐错 1 帧** | = 全局 **80 ms** 系统性偏差。**危险在于它在指标上表现为「视觉略有帮助」，极难察觉。** 因此 `tests/test_alignment.py`（脉冲响应单测）是强制的 |
-| **hidden 偏移 `−1`** | 正确写法 `hidden_states[prefix_length + i − 1]`（next-token 语义，`X2-Turn/.../inference.py:165`），写错则全局错位 |
+| **逐帧索引偏移 `−1`** | 正确写法 `prefix_length + frame_index − 1`（next-token 语义，见 `X2-Turn/…/transformers/inference.py:165`），写错则全局错位 |
 | **误改第三方目录** | 三个目录已删内层 `.git`，改了**不会有任何 git 提示**。改造一律走 `AV-SemanticVAD/avsvad/` 包装 |
 
 ---

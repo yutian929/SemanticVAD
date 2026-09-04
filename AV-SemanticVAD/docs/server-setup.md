@@ -201,7 +201,7 @@ Phase 0 一共三组事，按此顺序：
 | | 值 | 写错的后果 |
 |---|---|---|
 | 帧长 | **80 ms**（12.5 Hz） | 视听对齐全错 |
-| hidden 偏移 | **`prefix_length + i − 1`**（`X2-Turn/.../inference.py:165`） | 全局 80 ms 偏差，**表现为「视觉略有帮助」，极难察觉** |
+| 逐帧读出索引 | **`prefix_length + frame_index − 1`**<br>（`X2-Turn/…/transformers/inference.py:165`） | 全局 80 ms 偏差，**表现为「视觉略有帮助」，极难察觉** |
 
 ---
 
@@ -210,7 +210,8 @@ Phase 0 一共三组事，按此顺序：
 | 坑 | 说明 |
 |---|---|
 | **帧对齐错 1 帧** | = 全局 80 ms 系统性偏差，且表现为「视觉略有帮助」，**极难察觉**。必须写脉冲响应单测（计划单 §2.7） |
-| **`−1` 偏移** | `hidden_states[prefix_length + i − 1]`，next-token 语义，写错则全局错位（V4） |
+| **`−1` 偏移** | 逐帧索引是 `prefix_length + frame_index − 1`（next-token 语义），写错则全局错位（V4） |
+| **hidden 不在 `inference.py` 里** | `inference.py` 只拿到 `output.vad_logits`；`hidden_states` 仅在 `modeling.py:128,139,160,163` 内部。**做探针 A 需另找途径取 hidden**（见 `code-anchors.md` §1 的警告） |
 | `mediapipe` 缺 `libgl1` | `apt-get install -y libgl1 libglib2.0-0` |
 | **误改第三方目录** | 三个目录已删内层 `.git`，改了之后**不会有任何 git 提示**，且与上游 diff 会永久混入我们的改动。改造一律走 `avsvad/` 包装（§1.2） |
 | **误以为 training 是 main 的子集** | 两者是**互补的两棵树**，`main` 有推理代码、`training-code` 有训练代码，缺一不可（§1.2） |

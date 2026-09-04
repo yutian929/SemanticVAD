@@ -224,8 +224,23 @@ X2-Turn 训过 `turn_end`/`uncertain`，hidden 中很可能**已经**含有大�
 | ☐ | 步骤 | 说明 |
 |---|---|---|
 | ☐ | 取 ~1 K 弱标注停顿事件（Phase 1.2 的早期产物即可） | 不需要人审 |
-| ☐ | 抽 `hidden_states[prefix_length + i − 1]` | 注意 −1 偏移（arch F3） |
+| ☐ | **拿到 hidden**（⚠️ 见下方，比预想麻烦） | 索引用 `prefix_length + frame_index − 1`（arch F3） |
 | ☐ | 训 logistic regression / 单层 MLP | CPU 分钟级 |
+
+> ### ⚠️ 取 hidden 需要额外一步（已核实代码）
+>
+> `inference.py` 的 `infer_asr_turn()` **只返回 `output.vad_logits`，拿不到 hidden**。
+> `hidden_states` 仅存在于 `modeling.py` 内部（`:128,139,160,163`）。
+>
+> 三个可选做法：
+>
+> | 做法 | 说明 |
+> |---|---|
+> | **A（推荐）** | 对 `model.base_model.model(...)` 单独前向，取 `outputs.last_hidden_state` —— 这正是 `modeling.py:127-128` 的做法 |
+> | B | 在 `AVVoxtralMTP` 包装层里让 forward 额外返回 hidden（Phase 2 反正要写这个包装） |
+> | C | 挂 forward hook 抓取 | 
+>
+> **不要改 `X2-Turn/` 里的代码**（只读约定）。做法 A 只是调用，不算修改。
 
 **判据与行动**：
 
