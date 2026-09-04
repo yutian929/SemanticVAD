@@ -1,0 +1,370 @@
+INTERSPEECH 2023
+20-24 August 2023, Dublin, Ireland
+
+
+
+      Multimodal Turn-Taking Model Using Visual Cues for End-of-Utterance
+                     Prediction in Spoken Dialogue Systems
+                           Fuma Kurata1 , Mao Saeki1 , Shinya Fujie2 , Yoichi Matsuyama1
+                                                         1
+                                                          Waseda University
+                                                 2
+                                                     Chiba Institute of Technology
+                                                  kurata@pcl.cs.waseda.ac.jp
+
+
+                           Abstract                                          diction model using facial feature points that incorporate mo-
+                                                                             tion features of the eyes, mouth, and head. We then conduct an
+In this study, we propose a multimodal model for predicting the              ablation study to examine the effectiveness of these motion fea-
+end-of-utterance probability in spoken dialogue systems, high-               tures. We also extract visual features using 3D-CNN and fuse
+lighting the unique role of visual cues in addition to acous-                them with acoustic and language features to build a multimodal
+tic and linguistic information. Although the effectiveness of                model for predicting end-of-utterance. This study focuses on
+visual cues, such as gaze, mouth, and head movements, has                    online interview dialogues, and gestures are not included dur-
+been suggested, few studies have fully incorporated them into                ing validation as they are often not captured in this setting. The
+turn-taking models, and the relative importance of these visual              results of this study have the potential to improve turn-taking
+cues has also been underresearched. To address these issues,                 model accuracy by demonstrating the effectiveness of visual
+we first conducted an ablation study on visual features, show-               cues and the importance of incorporating comprehensive visual
+ing the larger contribution of eye movements than mouth and                  information in turn-taking models.
+head movements. Additionally, an end-to-end visual feature ex-
+traction model utilizing 3D-CNN is employed to comprehen-
+sively capture these visual cues. By combining visual features                                   2. Related work
+with acoustic and verbal information, AUC score for end-of-                  2.1. Classification of turn-taking models
+utterance prediction improved from 0.896 to 0.920, demonstrat-
+ing the effectiveness of incorporating these visual cues in turn-            Skantze categorized turn-taking models in spoken dialogue sys-
+taking models.                                                               tems into three groups [1]. The first category is represented by
+Index Terms: spoken dialog systems, turn-taking, multimodal                  the Silence-based model, which utilizes the speaker’s silence
+machine learning                                                             longer than a certain threshold to indicate the end of utterances.
+                                                                             However, it is not realistic to suppress interruptions while min-
+                                                                             imizing response delay [6]. The second category is the IPU-
+                      1. Introduction                                        based model, where IPUs (inter-pausal units) are speech seg-
+ This study proposes a turn-taking model incorporating visual,               ments without silence for a specific duration (e.g., 200 ms). The
+ acoustic, and linguistic features. Traditionally, turn-taking re-           end of the IPUs are detected using VAD or ASR, at which point
+ search in spoken dialogue systems has extensively relied on                 TRPs (transition-relevant places) are predicted from the turn-
+ linguistic and acoustic information as turn-taking cues, such               taking cues from the speaker. TRPs are defined as the point
+ as syntactic completion, semantics, intonation, speaking speed,             where a turn change can occur. Accurate prediction of TRPs
+ and other voice characteristics [1]. However, visual cues, such             allows the system to take turns with minimal gaps and avoid in-
+ as eye gaze, mouth movements, nodding, and gestures, have                   terrupting the user at non-TRP points. The third category is the
+ also been found to be effective turn-taking cues in conversation            Continuous model, which continuously processes user speech
+ analysis studies. For instance, Kendon [2] found that in face-to-           without relying on VAD or ASR. This model offers the ben-
+ face conversations, speakers often look away at the beginning of            efit of predicting not just TRPs, but also BRPs (backchannel-
+ their speech and look back at the end. Vincent et al. [3] demon-            relevant places) and intentional system interruptions during user
+ strated a strong correlation between mouth-opening movements                speech. This paper adopts the IPU-based turn-taking model,
+ and speech production, while Maynard [4] showed that in con-                which separates the optimization problem of turn-taking timing
+ versations in Japanese, speakers use vertical head movements                from the problem of TRP prediction. By focusing on the prob-
+ to indicate the end of a clause or turn. Furthermore, Duncan [5]            lem to just TRP prediction, we assess the effectiveness of visual
+ found that the end of the turn can be indicated by completing a             cues in turn-taking by comparing TRP prediction performance
+ hand gesture. These previous studies suggest that by incorpo-               with and without visual information.
+ rating these visual cues, turn-taking models have the potential to
+ improve accuracy. This study aims to investigate two research               2.2. Multimodal turn-taking model using visual cues
+ questions.
+                                                                             The literature on turn-taking models for spoken dialogue sys-
+1. How effective are visual cues, such as gaze, mouth, and head
+                                                                             tems is vast, with many studies focusing on linguistic or acous-
+    movements, as turn-taking cues?
+                                                                             tic cues or both [7, 8, 9, 10, 11, 12, 13]. Meanwhile, some
+2. To what extent can turn-taking model performance be im-                   studies have also incorporated visual cues. De Kok et al. [14]
+    proved by incorporating visual information in addition to au-            used a sequential probabilistic model that incorporated the head
+    dio and verbal cues?                                                     gestures of the participants to predict the end of a speaker’s turn
+ To answer these questions, we build an end-of-utterance pre-                in a multi-person conversation. Roddy et al. [15] proposed a
+
+
+
+
+                                                                      2658                             10.21437/Interspeech.2023-578
+turn-taking model that incorporates different timescale modali-                      4. Ablation study on visual cues
+ties and demonstrated the inclusion of gaze features along with
+                                                                            The literature of conversation analysis suggests that gaze [2],
+language and acoustic features. These studies, however, did not
+                                                                            mouth [3], and head movements [4] are useful cues for turn-
+fully utilize eye, mouth, and head movements, which have been
+                                                                            taking. However, no study has investigated the effectiveness
+established as valid visual turn-taking cues in previous research.
+                                                                            of individual cues in the turn-taking model. We conducted an
+In contrast, Ishii et al. [16] utilized comprehensive visual cues
+                                                                            ablation study on visual cues to evaluate their effectiveness.
+by extracting high-level representations of visual information as
+turn-taking cues from images of speakers using Resnet. How-
+                                                                            4.1. Design of visual features
+ever, they extracted visual information end-to-end, making it
+unclear which specific visual features were effective. To the               We used the speaker’s face landmark coordinates to extract vi-
+best of our knowledge, this study is the first to investigate in            sual features of gaze, mouth, and head movements. To obtain
+detail the effectiveness of visual cues in a turn-taking model.             the coordinates, we used MediaPipe’s FaceMesh1 and collected
+Accordingly, we conduct an ablation study to identify practical             478 landmark points from the speaker’s face. We calculated
+visual features for turn-taking cues.                                       three types of feature, as shown in Table 1, using the coordi-
+                                                                            nates of the eyes, mouth, and facial contours. The first feature
+                                                                            is the pupil position, which captures the relative position of the
+                         3. Dataset                                         pupil concerning the eye size in the x and y-axis directions. The
+                                                                            second feature is the mouth opening, which indicates the extent
+To create a dataset of turn-taking samples, we adopted online
+                                                                            of mouth opening relative to the face size in both x and y direc-
+interviews that were originally designed to assess an English
+                                                                            tions. The third feature is the head direction, which indicates the
+speaking ability [17]. The data comprises 210 dialogues of a
+                                                                            inclination of the speaker’s head in roll, pitch, and yaw direc-
+10-minute online interview conversation between a Japanese
+                                                                            tions relative to the camera’s front direction. Figure 2 shows the
+learner of English and an English teacher. Figure 1 illustrates
+                                                                            appearance of these features. We standardized these 7 features
+the process of creating video clips. The audio and video of both
+                                                                            to have a mean of 0 and a variance of 1.
+the interviewer and interviewee were segmented into IPUs, and
+a 5-second video clip was created by cutting from the end of
+each IPU. In this study, each video was segmented by a silence
+longer than 300ms. Each video clip included a 0.3-second silent
+interval after the end of the IPU. A total of 21,728 video clips
+were created and the samples were divided into training, valida-
+tion, and evaluation sets: the dataset contained 18,910 training
+samples, 1,911 validation samples, and 1,046 evaluation sam-
+ples.
+
+                                                                            Fig. 2. Visual feature extraction: The feature points used for
+                                                                            extracting pupil positions, mouth opening, and head direction
+                                                                            features, along with the line segments connecting each of them.
+
+
+
+                                                                            4.2. Visual feature extraction model
+                                                                            We used a 5-layer unidirectional LSTM as a feature extraction
+Fig. 1. Dataset creation process: Clip out the last 5 seconds               model to capture the temporal changes in gaze, mouth, and head
+of IPUs to create video clips for the dataset. Each video clip              using the aforementioned features. The number of intermediate
+contains a 0.3-second silence interval after the IPU.                       dimensions of LSTM was set to 15, and 3 fully connected lay-
+                                                                            ers were added on the top of the intermediate layer at the final
+                                                                            timestep to obtain an output dimensionality of 2. The final out-
+     To systematically generate training data, we used multi-               put value was passed through the softmax function to generate
+ple rules to automatically label the training and validation data.          the probabilities of ”end utterance” and ”continue utterance”.
+During the interview, the speaker either continues speaking af-             For the model input, we utilized the final 2-second visual fea-
+ter IPU or gives the turn to the interlocutor. We assigned the              tures from the end of the 5-second video clip. We used the
+label of ”continue utterance” in the former case and that of                dataset described in Section 3 and cross-entropy loss as the ob-
+”end utterance” in the latter case. Multiple conditions were set            jective function, with a learning rate of 5 × 10−3 .
+using voice activity detection (VAD) and transcription of dia-
+logue sentences to execute this process. The training data con-             4.3. Result of ablation study
+sisted of 8,109 ”continue utterance” samples and 10,801 ”end                This section explores how effective eye gaze and mouth and
+utterance” samples. To accurately measure the model perfor-                 head movements are as visual cues for turn-taking. We per-
+mance, the test data were labeled by three annotators. In cases             formed an ablation study on the aforementioned model to eval-
+where a judgment cannot be made, the label ”unknown” was as-                uate the effectiveness of these features. The experiment set out
+signed, and the ground truth was determined based on the ma-                to examine the effects of removing the pupil position, mouth
+jority vote. Nineteen samples without a majority were excluded              opening, and head direction features from the input of LSTM
+from the evaluation data. The inter-rater agreement was 0.767               end-of-utterance prediction model on its performance.
+using Krippendorf’s alpha. The test data consisted of 530 ”con-
+tinue utterance” samples and 497 ”end utterance” samples.                      1 https://google.github.io/mediapipe/solutions/face mesh.html
+
+
+
+
+                                                                     2659
+                                                    Table 1. Extraction method for each visual feature
+
+         Features                                                                           Extraction method
+ X-axis - pupil position           (x-axis distance between the center of the pupil and left edge of eye)/(x-axis distance between the right and left edge of eye)
+ Y-axis - pupil position     (y-axis distance between the center of the pupil and the upper edge of the eye)/(y-axis distance between the top and bottom of the eye)
+ X-axis - mouth opening      (x-axis distance between the right and left edges of the mouth)/(x-axis distance of the left and right reference feature points of the face)
+ Y-axis - mouth opening        (y-axis distance between top and bottom of the mouth)/(y-axis distance of the upper and lower reference feature points of the face)
+   Roll-head direction         (x-axis coordinates of feature points in the upper part of the face)-(x-axis coordinates of feature points in the lower part of the face)
+  Pitch - head direction       (z-axis coordinates of feature points in the upper part of the face)-(z-axis coordinates of feature points in the lower part of the face)
+  Yaw - head direction           (z-axis coordinates of feature points in the left part of the face)-(z-axis coordinates of feature points on the right part of the face)
+
+
+
+           Table 2. Ablation study on visual features                                    were then used as input for X3d-S.
+                           AUC     Accuracy     Precision    Recall     F1
+      All features         0.801    0.797         0.739      0.899     0.811
+    w/o eye feature        0.684    0.678         0.619      0.870     0.723
+  w/o mouth feature        0.739    0.733         0.660      0.924     0.770
+ w/o head pose feature     0.758    0.759         0.700      0.875     0.778
+
+
+
+     Table 2 shows that the model with all features provides the
+best performance for end-of-utterance prediction, indicating the
+essential role of pupil position, mouth opening, and head di-                                Fig. 3. Image before processing                  Fig. 4. Image post
+rection features in accurate turn-taking. Furthermore, the worst                                                                              processing
+performance was observed when the pupil positional features
+were removed, indicating that gaze movement is the most cru-
+                                                                                              The model was trained using the same process as in Section
+cial signal for turn-taking among the three movements of gaze,
+                                                                                         4.2. A learning rate of 10−4 was used during training.
+mouth, and head. Additionally, the performance was compa-
+rable when removing the mouth opening and head direction
+                                                                                         5.2. Evaluation of End-to-End model
+features, with a slightly lower performance when excluding the
+mouth opening feature. This suggests that mouth movement is a                            To evaluate the end-to-end model using X3d, we compared it to
+relatively more critical cue for turn-taking than head movement.                         the non-end-to-end model based on Facemesh and LSTM pre-
+     To further explore the effectiveness of the visual feature ex-                      viously described in Section 4.2. The results are presented in
+traction model, we qualitatively observed misclassified samples                          Table 3.
+in predicting the end-of-utterance with all visual features. Sev-
+eral samples were found to have incorrect predictions due to                                                Table 3. Evaluation of E2E model
+the failure to capture movements. Due to the limited number
+of dimensions in the visual features, the visual cues extraction                               approach            AUC      Accuracy      Precision     Recall     F1
+capability may be inadequate. To enhance the performance of                                 Non-E2E(LSTM)          0.801     0.797          0.738       0.899     0.811
+                                                                                               E2E(X3d)            0.830     0.831          0.805       0.857     0.830
+the visual feature extraction model, we explored an end-to-end
+approach that utilizes higher-dimensional visual features in the
+second experiment.                                                                            The end-to-end model using X3d-S demonstrated higher
+                                                                                         AUC, accuracy, and F1 metrics in comparison to the non-end-
+   5. End-to-End visual feature extraction                                               to-end model using LSTM, indicating a more accurate predic-
+                                                                                         tion of the end-of-utterance using the former approach. This is
+5.1. End-to-End model using 3D-CNN                                                       possibly due to the precise capture of gaze information through
+Ishii et al. [16] combined ResNet and GRU for visual feature                             the utilization of higher-dimensional visual features. Nonethe-
+extraction. ResNet extracted spatial image features while GRU                            less, the end of a speaker’s utterance depends not only on visual
+captured their temporal changes. For our visual feature extrac-                          cues but also on prosody and the content of the utterance [1].
+tion model, we used X3d [18], a 3D-CNN that can extract both                             The next section examines to what extent incorporating acous-
+spatial and temporal features. X3d is expected to capture visual                         tic and linguistic information alongside visual information can
+turn-taking cues more accurately than a 2D-CNN-LSTM model                                enhance predictive performance.
+given its superior performance in video object recognition tasks
+[18, 19]. We selected X3d-S as our model size for this study.                              6. Multimodal end-of-utterance prediction
+     Before being inputted into the X3d model, the image se-
+                                                                                         6.1. Overview
+quence of the video clips underwent the following preprocess-
+ing steps: (1) extracting the video frame by frame and retaining                         Our proposed multimodal end-of-utterance prediction model
+the last 2 seconds, (2) extracting the facial region based on the                        extracts acoustic, linguistic, and a comprehensive set of visual
+facial landmark coordinates using FaceMesh of MediaPipe, (3)                             features from the speaker’s face, which are then fused for pre-
+resizing the image and adjusting the length of the long side to                          diction. Figure 5 shows a whole architecture of the proposed
+the specified length for X3d-S, (4) making the image square by                           model. The proposed model comprises three submodules that
+zero-padding the shorter sides, (5) down-sampling the number                             extract acoustic, linguistic, and visual features, fused using five
+of frames in the time direction to match the specified length of                         fully connected layers. The model outputs the probability of
+X3d-S, and (6) normalizing the image colors for image recog-                             ”end utterance” and ”continue utterance” by passing through
+nition preprocessing. The resulting preprocessed image tensors                           the softmax function. This model can work with a single or
+
+
+
+
+                                                                                2660
+a combination of submodules as it is fused by simple concate-                     Table 4. Evaluation of proposed multimodal model
+nation. The following sections will explain the details of each
+                                                                                  Input Feature       AUC     Accuracy   Precision   Recall    F1
+submodule.                                                                           Audio            0.887    0.885       0.833     0.953    0.889
+                                                                                     Vision           0.830    0.831       0.805     0.857    0.830
+                                                                                    Language          0.827    0.826       0.794     0.863    0.827
+                                                                                  Audio+Vision        0.917    0.918       0.896     0.940    0.917
+                                                                                Audio+Language        0.896    0.896       0.874     0.918    0.895
+                                                                                Vision+Language       0.836    0.835       0.827     0.852    0.833
+                                                                             Audio+Vision+Language    0.920    0.919       0.891     0.950    0.919
+
+
+
+                                                                            information with a slightly lower AUC score of 0.827. Fur-
+                                                                            thermore, the performance of the multimodal model improved
+                                                                            significantly, from an AUC score of 0.896 to 0.920, by combin-
+                                                                            ing visual information with acoustic and linguistic information,
+                                                                            indicating the usefulness of visual cues in turn-taking. Con-
+                                                                            versely, the addition of linguistic information to acoustic and
+                                                                            visual information only resulted in a marginal improvement in
+                                                                            the AUC score, from 0.917 to 0.920. Future research should ex-
+                                                                            plore methods for aligning linguistic information with acoustic
+                                                                            and visual information in an organic manner.
+Fig. 5. The proposed multimodal model architecture: The num-
+bers in parentheses in the figure indicate the dimensionality of
+the tensor output from each layer. B size represents the batch                                       7. Conclusion
+size.                                                                       This study confirms the effectiveness of visual information as
+                                                                            turn-taking cues and proposes a multimodal end-of-utterance
+                                                                            prediction model using comprehensive visual cues. We devel-
+6.2. Feature extraction modules                                             oped a model that extracts motion features of the eye, mouth,
+                                                                            and head based on facial landmark coordinates and predicts the
+We utilized Wav2vec 2.0 [20] to extract acoustic turn-taking                end of utterance. Our ablation study showed that these three
+cues from the speaker’s voice. This pre-trained self-supervised             motion features contributed to the performance of predicting the
+learning framework uses a large amount of speech data as a fea-             end-of-utterance, with eye movements being the most signifi-
+ture extractor to learn these cues. We finetuned the ”wav2vec2-             cant factor. We then employed 3D-CNN to extract comprehen-
+base” pre-trained model with the dataset described in Section 3,            sive visual features end-to-end, resulting in better performance
+which was augmented with noise. Visual cues from the speaker                compared to the non-end-to-end model. Finally, by integrating
+were extracted using the method described in Section 5.1, and               these visual features with acoustic and linguistic features, we
+language features were extracted using Bert [21]. Bert used the             demonstrated that incorporating visual cues improved the end-
+transcribed utterances of the interviewer and interviewee as dia-           of-utterance prediction performance, showing the effectiveness
+logue history, with up to 512 tokens before the end of the video            of using visual cues in turn-taking models.
+clip. We used the ”bert-base-uncased” learned model for Bert.
+                                                                                             8. Acknowledgement
+6.3. Model Training
+                                                                            This paper is based on results obtained from a project,
+The proposed multimodal end-of-utterance prediction model                   JPNP20006 (”Online Language Learning AI Assistant that
+was trained in two steps. In step 1, we trained the unimodal                Grows with People”), subsidized by the New Energy and In-
+end-of-utterance predictors for the acoustic feature extraction             dustrial Technology Development Organization (NEDO).
+model, visual feature extraction model, and language feature
+extraction model. The problem setup, dataset, and loss function
+are identical to the model in the ablation study section 4.2. Dur-
+                                                                                                     9. References
+ing training, we set the learning rate to 2×10−5 for the acoustic            [1] G. Skantze, “Turn-taking in conversational systems and human-
+feature extraction model, 10−4 for the visual feature extraction                 robot interaction: a review,” Computer Speech & Language,
+                                                                                 vol. 67, p. 101178, 2021.
+model, and 5 × 10−6 for the language feature extraction model.
+In step 2, we trained the fully connected layer of the multimodal            [2] A. Kendon, “Some functions of gaze-direction in social interac-
+end-of-utterance prediction model while keeping the parame-                      tion,” Acta psychologica, vol. 26, pp. 22–63, 1967.
+ters of each submodule fixed. Only the fully connected layer                 [3] V. L. Gracco and A. Lofqvist, “Speech motor coordination and
+was trained with a learning rate of 10−4 .                                       control: evidence from lip, jaw, and laryngeal movements,” Jour-
+                                                                                 nal of Neuroscience, vol. 14, no. 11, pp. 6585–6597, 1994.
+6.4. Model evaluation                                                        [4] S. K. Maynard, “Interactional functions of a nonverbal sign head
+                                                                                 movement in japanese dyadic casual conversation,” Journal of
+In the experiment, we compared the performance or end-of-                        pragmatics, vol. 11, no. 5, pp. 589–606, 1987.
+utterance prediction for all combinations of acoustic, linguis-              [5] S. Duncan, “Some signals and rules for taking speaking turns
+tic, and visual features. The results are presented in Table 4.                  in conversations.” Journal of personality and social psychology,
+Among the unimodal models, the model that utilized acoustic                      vol. 23, no. 2, p. 283, 1972.
+information achieved the highest AUC score of 0.887, followed                [6] N. G. Ward, A. G. Rivera, K. Ward, and D. G. Novick, “Root
+by the model that incorporated visual information with an AUC                    causes of lost time and user stress in a simple dialog system,”
+score of 0.830, and the model that relied solely on linguistic                   2005.
+
+
+
+
+                                                                     2661
+ [7] E. Ekstedt and G. Skantze, “Turngpt: a transformer-based lan-
+     guage model for predicting turn-taking in spoken dialog,” arXiv
+     preprint arXiv:2010.10874, 2020.
+ [8] K. Hara, K. Inoue, K. Takanashi, and T. Kawahara, “Prediction of
+     turn-taking using multitask learning with prediction of backchan-
+     nels and fillers,” Listener, vol. 162, p. 364, 2018.
+ [9] N. G. Ward, D. Aguirre, G. Cervantes, and O. Fuentes, “Turn-
+     taking predictions across languages and genres using an lstm re-
+     current neural network,” in 2018 IEEE Spoken Language Technol-
+     ogy Workshop (SLT). IEEE, 2018, pp. 831–837.
+[10] J. Yang, P. Wang, Y. Zhu, M. Feng, M. Chen, and X. He, “Gated
+     multimodal fusion with contrastive learning for turn-taking pre-
+     diction in human-robot dialogue,” in ICASSP 2022-2022 IEEE
+     International Conference on Acoustics, Speech and Signal Pro-
+     cessing (ICASSP). IEEE, 2022, pp. 7747–7751.
+[11] D. Lala, K. Inoue, and T. Kawahara, “Evaluation of real-time deep
+     learning turn-taking models for multiple dialogue scenarios,” in
+     Proceedings of the 20th ACM International Conference on Multi-
+     modal Interaction, 2018, pp. 78–86.
+[12] J. Sakuma, S. Fujie, and T. Kobayashi, “Response timing estima-
+     tion for spoken dialog systems based on syntactic completeness
+     prediction,” in 2022 IEEE Spoken Language Technology Work-
+     shop (SLT). IEEE, 2023, pp. 369–374.
+[13] R. Masumura, T. Tanaka, A. Ando, R. Ishii, R. Higashinaka, and
+     Y. Aono, “Neural dialogue context online end-of-turn detection,”
+     in Proceedings of the 19th Annual SIGdial Meeting on Discourse
+     and Dialogue, 2018, pp. 224–228.
+[14] I. De Kok and D. Heylen, “Multimodal end-of-turn prediction in
+     multi-party meetings,” in Proceedings of the 2009 international
+     conference on Multimodal interfaces, 2009, pp. 91–98.
+[15] M. Roddy, G. Skantze, and N. Harte, “Multimodal continuous
+     turn-taking prediction using multiscale rnns,” in Proceedings of
+     the 20th ACM International Conference on Multimodal Interac-
+     tion, 2018, pp. 186–190.
+[16] R. Ishii, X. Ren, M. Muszynski, and L.-P. Morency, “Multimodal
+     and multitask approach to listener’s backchannel prediction: Can
+     prediction of turn-changing and turn-management willingness im-
+     prove backchannel modeling?” in Proceedings of the 21st ACM
+     International Conference on Intelligent Virtual Agents, 2021, pp.
+     131–138.
+[17] M. Saeki, Y. Matsuyama, S. Kobashikawa, T. Ogawa, and
+     T. Kobayashi, “Analysis of multimodal features for speaking pro-
+     ficiency scoring in an interview dialogue,” in 2021 IEEE Spoken
+     Language Technology Workshop (SLT), 2021, pp. 629–635.
+[18] C. Feichtenhofer, “X3d: Expanding architectures for efficient
+     video recognition,” in Proceedings of the IEEE/CVF conference
+     on computer vision and pattern recognition, 2020, pp. 203–213.
+[19] J. Carreira and A. Zisserman, “Quo vadis, action recognition? a
+     new model and the kinetics dataset,” in proceedings of the IEEE
+     Conference on Computer Vision and Pattern Recognition, 2017,
+     pp. 6299–6308.
+[20] A. Baevski, Y. Zhou, A. Mohamed, and M. Auli, “wav2vec
+     2.0: A framework for self-supervised learning of speech repre-
+     sentations,” Advances in Neural Information Processing Systems,
+     vol. 33, pp. 12 449–12 460, 2020.
+[21] J. Devlin, M.-W. Chang, K. Lee, and K. Toutanova, “Bert: Pre-
+     training of deep bidirectional transformers for language under-
+     standing,” arXiv preprint arXiv:1810.04805, 2018.
+
+
+
+
+                                                                         2662
+

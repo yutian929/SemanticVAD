@@ -1,0 +1,6 @@
+[submodule "X2-Turn"]
+	path = X2-Turn
+	url = https://github.com/yutian929/X2-Turn.git
+[submodule "SoulX-Duplug"]
+	path = SoulX-Duplug
+	url = https://github.com/yutian929/SoulX-Duplug.git

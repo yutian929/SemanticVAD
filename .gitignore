@@ -1,0 +1,120 @@
+# ============================================================
+# 模型权重 / 检查点  ——  绝不入库（SoulX 的 pretrained_models 单独就 7.2 GB）
+# ============================================================
+pretrained_models/
+pretrain_models/
+checkpoints/
+ckpt/
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.gguf
+*.onnx
+
+# ============================================================
+# 数据集 / 中间产物
+#
+# ⚠️ 必须用「根锚定」路径（前导 /），不能写 `data/` ——
+#    否则会连带忽略源码目录 avsvad/data/（内含 align.py / labeler.py /
+#    outcome.py / crosstab.py / augment.py / dataset.py）。
+# ============================================================
+/data/
+/datasets/
+/AV-SemanticVAD/data/
+/AV-SemanticVAD/datasets/
+outputs/
+*.tfrecord
+*.arrow
+*.lmdb
+
+# 结果目录：忽略内容但保留目录本身
+/AV-SemanticVAD/results/*
+!/AV-SemanticVAD/results/.gitkeep
+
+# 媒体（语料原始音视频；研究用 PDF 例外，见白名单）
+*.wav
+*.mp3
+*.flac
+*.m4a
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+
+# 白名单：论文与文档资产
+!AV-SemanticVAD/research/*.pdf
+!**/assets/**
+
+# ============================================================
+# Python
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# 虚拟环境
+.venv
+.venv-*
+venv/
+env/
+ENV/
+.conda/
+
+# ============================================================
+# 实验追踪 / 日志
+# ============================================================
+wandb/
+runs/
+lightning_logs/
+tensorboard/
+*.log
+logs/
+
+# ============================================================
+# 编辑器 / 系统
+# ============================================================
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+.cursorignore
+.cursorindexingignore
+
+# ============================================================
+# 临时
+# ============================================================
+tmp/
+temp/
+.ipynb_checkpoints/
+*.swp
+*~
+
+# ============================================================
+# 本地机密（HF token / API key 等）
+# ============================================================
+.env
+.envrc
+*.secret
+secrets/
+
+# ============================================================
+# ★★ 绝不入库：含真实凭据的内部资料
+#     HY-ASR 内含混元 ASR 的 Bearer Token 与内部接口文档。
+#     该目录仅保留在本地，任何情况下不得提交。
+# ============================================================
+/HY-ASR/
+HY-ASR/
