@@ -7,11 +7,13 @@
 
 ---
 
-## 1. X2-Turn（base，`@53d3b9a`）
+## 1. X2-Turn（base，上游 `@8992c7c`）
 
 **角色**：本项目的 base 权重来源，**全部冻结**。
 
-> **行号已在 `@53d3b9a` 上逐一核实**（2026-09-04）。
+> **行号已在上游 `@8992c7c` 上复验**（2026-09-14）—— `modeling.py` 与 `inference.py`
+> 与上游**逐字节一致**，下表全部锚点仍成立。
+> 溯源与 fork 差异见 [`../../THIRD_PARTY.md`](../../THIRD_PARTY.md) §1.1–1.2。
 > 两个文件的完整路径前缀均为
 > `X2-Turn/voxtral-realtime/src/voxtral_realtime/transformers/`，下表简写为 `…/`。
 
@@ -28,17 +30,39 @@
 | `prefix_length` 定义 | `…/inference.py:133` | `= input_ids.shape[1]` |
 | `frame_count` 计算 | `…/inference.py:135` | `= num_audio_tokens - prefix_length` |
 | 取 `vad_logits` 并逐帧判决 | `…/inference.py:162-168` | 我们的 ci 判决要挂在同一循环里 |
-| 安装脚本 | `X2-Turn/install.sh` | 环境配置首选 |
-| 流式客户端 | `X2-Turn/turn-demo/stream_client.py` | 真机链路参考 |
+| 安装脚本 | `X2-Turn/install.sh` | ⚠️ **fork 自制，非上游**（见下方警告）；官方路径见 `server-setup.md` §2.1 |
+| 流式客户端 | `X2-Turn/turn-demo/stream_client.py` | 真机链路参考 —— ⚠️ **fork 自制，非上游** |
+
+> ⚠️ **归属修正（2026-09-14 核实）**：`install.sh`、`turn-demo/stream_client.py`、
+> `turn-demo/requirements-client.txt` 在上游 `X-Square-Robot/X2-Turn` 的历史中
+> **从未存在**（`git log --all -- <file>` 返回空），它们来自 `yutian929` 的 fork。
+> **可以用，但论文与文档中不得称其为上游实现。**
+> 完整增删清单见 [`../../THIRD_PARTY.md`](../../THIRD_PARTY.md) §1.2 B。
 
 > ⚠️ **`hidden_states` 只在 `modeling.py` 内部出现**（`:128,139,160,163`），
 > `inference.py` 拿到的已经是 `output.vad_logits`。
 > 若要抽 hidden 做**探针 A**，需在 `modeling.py` 的 forward 返回值上取，
 > 或对 `base_model.model` 单独前向 —— 不要指望 `inference.py` 能直接给你 hidden。
 
-> ⚠️ **规则控制器注入点**（`AcousticVoiceGate`，Phase 5 要照抄的模式）
-> 不在上述目录，位于 X2-Turn 的 demo 服务端。用
-> `grep -rn "AcousticVoiceGate\|acoustic_active" X2-Turn/` 定位后再回来补行号。
+> ### ★ 规则控制器与外部信号注入点（Phase 5.1.4 要照抄的模式，**2026-09-14 已定位**）
+>
+> 路径前缀 `X2-Turn/voxtral-realtime/src/voxtral_realtime/`，下表简写 `§/`。
+>
+> | 内容 | 位置 | 为什么要读 |
+> |---|---|---|
+> | `class AcousticVoiceGate` 定义 | `§/audio.py:8` | 外部信号源的实现形态 |
+> | import 与实例化 | `§/server.py:15` / `server.py:31` | 挂载方式 |
+> | **★ 每帧求值** | **`§/server.py:102`**：`acoustic_active = self.acoustic_gate.update(pcm)` | **我们的 `p(continue)` 应在此并列产出** |
+> | **★ 注入控制器** | **`§/server.py:115-120`**（`self.controller.on_frame(raw_turn, asr_text, frame_index, acoustic_active)`，`acoustic_active` 在 `:119`） | **全仓库唯一注入点，ci 判决照此接入** |
+> | trace 落盘字段 | `§/server.py:135-137, 162-163` | 加 ci 字段时照此扩展，便于离线复盘 |
+> | 控制器侧接收 | `§/turn/controller.py:94-104`（`on_frame` 签名 + `self.st.acoustic_active` 写入） | 形参顺序与状态写入 |
+> | **veto 逻辑与上限** | **`§/turn/controller.py:110-118`** | `acoustic_active and acoustic_hold_run < cfg.acoustic_vad_max_hold_frames` → `tail_cancel_vad` —— 这就是「外部信号只能延缓、不能无限阻断」的 fail-safe 写法，**降级保证（纪律 3）可直接复用** |
+>
+> **★ `FrameTurnConfig` 默认值已于 2026-09-14 同步到上游 v4**
+> （`silence_end_frames` 3→**10**、`tail_max_frames` 5→**1**、
+> `acoustic_vad_max_hold_frames` 8→**3**，定义在 `§/turn/controller.py:44-56`，
+> `§/config.py` 同步）。
+> **C3 的规则控制器基线必须用这组新值** —— 理由见 [`../../THIRD_PARTY.md`](../../THIRD_PARTY.md) §1.3。
 
 ## 2. SoulX-Duplug（范式 · 推理侧，`main @45bd237`）
 
@@ -119,8 +143,14 @@ grep -n "TURN_CLASS_IDS"       $D/modeling.py
 grep -n "train_vad_head_only"  $D/modeling.py
 grep -n "prefix_length"        $D/inference.py
 
+S=X2-Turn/voxtral-realtime/src/voxtral_realtime
+grep -n "class AcousticVoiceGate"              $S/audio.py
+grep -n "acoustic_gate\|on_frame"              $S/server.py
+grep -n "acoustic_vad_max_hold_frames"         $S/turn/controller.py
+
 grep -n "class EncoderProjector\|token_samples" SoulX-Duplug/model/model.py
 grep -n "complete_logit\|complete_bias"         SoulX-Duplug/service/model.py
 ```
 
-**不要凭记忆写行号。** 上表所有行号均在纳入的提交上逐条 `grep` 验证过。
+**不要凭记忆写行号。** 上表所有行号均在纳入的提交上逐条 `grep` 验证过，
+并已于 2026-09-14 在上游 `@8992c7c` 上复验（`modeling.py` / `inference.py` 与上游一致）。

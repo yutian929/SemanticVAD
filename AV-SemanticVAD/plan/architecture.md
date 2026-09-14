@@ -900,14 +900,22 @@ X2-Turn 真正决定"何时开口"的是 `turn/controller.py`（429 行 if-else 
 ci 判决须接进去才能影响实际交互：
 
 ```
-ci_logits ──► p(continue) ──► 调制 silence_end_frames (240 ms)
-                                   tail_max_frames    (400 ms)
+ci_logits ──► p(continue) ──► 调制 silence_end_frames (v4 默认 10 = 800 ms)
+                                   tail_max_frames    (v4 默认  1 =  80 ms)
                               factor = 1 + g·conf·(2p−1)，clamp
 ```
 
+> ⚠️ **基准值已更新为上游 v4**（2026-09-14）。旧版写 240 ms / 400 ms，
+> 那是上游 `01af067` 之前的默认值，**已废弃**。
+> 上游把 `silence_end_frames` 提到 800 ms 的注释原文是 *"live mic: tolerate natural pauses"* ——
+> 因此「往长了调」的空间已被上游占掉，**我们的主要收益方向是「往短了调」**，
+> 这会改变 `g` 与 clamp 的设计。详见
+> [`implementation-plan.md`](implementation-plan.md) §4.4 与 [`../../THIRD_PARTY.md`](../../THIRD_PARTY.md) §1.3。
+
 **模型负责判决，控制器负责时序。** 仓库里已有外部信号注入先例可照抄：
-`AcousticVoiceGate`（`server.py:102` → `on_frame(..., acoustic_active)`），
-接入点全仓库仅一处（`server.py:115-120`）。
+`AcousticVoiceGate`（`server.py:102` 每帧求值 → `server.py:115-120` 注入 `on_frame`），
+接入点全仓库仅一处；其 veto 上限逻辑（`controller.py:110-118`）即
+「外部信号只能延缓、不能无限阻断」的现成实现，可直接复用为降级保证。
 
 ## 3.14 前置探针（动手前必做）
 

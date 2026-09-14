@@ -86,7 +86,7 @@ git config --global url."git@github.com:".insteadOf "https://github.com/"
 
 | 目录 | 内容 | 版本 |
 |---|---|---|
-| `X2-Turn/` | base 权重来源 | `@53d3b9a` (2026-08-31) |
+| `X2-Turn/` | base 权重来源 | 上游 `@8992c7c` (2026-09-10)<br>⚠️ fork `@53d3b9a` 不存在于上游 |
 | `SoulX-Duplug/` | 范式参考（**推理服务**） | `main @45bd237` |
 | **`SoulX-Duplug-training/`** | **训练代码参考** | `training-code @928b065` |
 
@@ -104,13 +104,29 @@ git config --global url."git@github.com:".insteadOf "https://github.com/"
 
 ## 2. 环境
 
-### 2.1 X2-Turn 自带脚本（推荐先试）
+### 2.1 ★ 官方路径（推荐，2026-09-14 修正）
+
+上游 README 的唯一官方安装路径是**按 `environments/` 下的 yml 建独立 conda 环境**：
 
 ```bash
-cd X2-Turn && bash install.sh
+cd X2-Turn
+conda env create -f environments/environment-transformers.yml
+conda activate x2-turn
+python -m pip install -e "./voxtral-realtime[transformers]"
+python -m pip install -e "./turn-demo"
 ```
 
-该脚本为上游 2026-08-31 新增（237 行），会处理依赖安装。
+上游把环境拆成三个独立 yml（`environment-transformers.yml` / `environment-vllm.yml` /
+`environment-dialogue.yml`），刻意**不共用同一 CUDA/Torch 树**，避免依赖冲突。
+Phase 0 只需 `transformers` 那个（vLLM 是打补丁版，链路深、时间风险大，见计划单 §5.1.2）。
+
+> ⚠️ **`X2-Turn/install.sh` 是 fork 自制脚本，不是上游的。**
+> 本文件旧版称其「为上游 2026-08-31 新增（237 行）」并推荐优先使用 —— **该表述已核实为错误**：
+> `git log --all -- install.sh` 在上游仓库返回空，该文件从未存在于上游历史。
+> 详见 [`../../THIRD_PARTY.md`](../../THIRD_PARTY.md) §1.2 B。
+>
+> 它仍可作为**备选**（省事），但**验收失败时应回到上述官方路径排查**，
+> 且论文/README 中不得把它称为上游提供的安装方式。
 
 ### 2.2 若需手工建环境
 
@@ -124,7 +140,7 @@ nvidia-smi | head -3
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 
 # X2-Turn 依赖
-cd X2-Turn && pip install -e . && cd ..
+cd X2-Turn && pip install -e "./voxtral-realtime[transformers]" && cd ..
 
 # 我们新增的依赖
 pip install peft transformers accelerate datasets \
@@ -136,6 +152,9 @@ pip install peft transformers accelerate datasets \
 
 > ⚠️ `mediapipe` 在部分服务器发行版上需 `libgl1`：
 > `apt-get install -y libgl1 libglib2.0-0`
+
+> ℹ️ 上游 Transformers 加载器**不需要 `trust_remote_code`**、也不 patch Transformers。
+> 若某处要求这两样，说明用错了链路。
 
 ---
 

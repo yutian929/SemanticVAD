@@ -16,7 +16,7 @@
 | [`START-HERE.md`](START-HERE.md) | **入口** | 阅读顺序、当前状态、下一步动作 |
 | [`AV-SemanticVAD/`](AV-SemanticVAD/) | **主项目** | 计划、调研、代码（待实现） |
 | [`THIRD_PARTY.md`](THIRD_PARTY.md) | 溯源清单 | 三份第三方代码的 SHA / 许可 / 只读约定 |
-| [`X2-Turn/`](X2-Turn/) | 第三方（只读） | **base 权重来源**，`@53d3b9a` |
+| [`X2-Turn/`](X2-Turn/) | 第三方（只读） | **base 权重来源**，上游 `@8992c7c`（fork SHA 见 `THIRD_PARTY.md` §1.1） |
 | [`SoulX-Duplug/`](SoulX-Duplug/) | 第三方（只读） | 范式参考（推理侧），`main @45bd237` |
 | [`SoulX-Duplug-training/`](SoulX-Duplug-training/) | 第三方（只读） | 范式参考（训练侧），`training-code @928b065` |
 

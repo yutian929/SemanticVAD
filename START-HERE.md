@@ -94,7 +94,12 @@ huggingface-cli download x-square-robot/X2-Turn-4B-0812 \
 ### 第二批（§P0.2）：环境、基线复现，以及 V3 / V7
 
 ```bash
-cd X2-Turn && bash install.sh          # 上游自带安装脚本
+cd X2-Turn
+conda env create -f environments/environment-transformers.yml   # 上游官方路径
+conda activate x2-turn
+python -m pip install -e "./voxtral-realtime[transformers]"
+python -m pip install -e "./turn-demo"
+# ⚠️ install.sh 是 fork 自制脚本、不是上游的，只作备选（THIRD_PARTY.md §1.2 B）
 # 权重下载见 AV-SemanticVAD/docs/server-setup.md §3
 ```
 

@@ -44,7 +44,7 @@
 |---|---|---|---|
 | **C1** | **AVSC-Corpus**：首个带**语义完整性**（complete/incomplete）标注的**视听**语料，中/英双语 | HF Dataset + 标注工具 + Datasheet | 弱标注全量铺开 + 测试集全人工 + 双人 κ + **双轴标注**（§1.3） |
 | **C2** | **AV-X2-Turn**：冻结骨干上的轻量视觉扩展（Projector + LoRA + 征用空闲 id 的判别头） | 代码 + 权重 | 同构消融（同权重 mask 掉视觉即 −视觉臂） |
-| **C3** | **真机系统评测**：错误打断率 / 响应延迟 / 固定阈值 Pareto / 降级安全 | demo 视频 + 指标表 | 与原始规则控制器同台，人类参考上界 |
+| **C3** | **真机系统评测**：错误打断率 / 响应延迟 / 固定阈值 Pareto / 降级安全 | demo 视频 + 指标表 | 与规则控制器**上游 v4 默认配置**同台（§4.4，**不得用已废弃的旧默认值**），人类参考上界 |
 
 ## 0.1.1 ★ C1 的精确措辞与论证（2026-09-04 核实后重写）
 
@@ -226,7 +226,7 @@ huggingface-cli download x-square-robot/X2-Turn-4B-0812 \
 
 | ☐ | 任务 | 交付物 | 验收 |
 |---|---|---|---|
-| ☐ | P0.2.1 环境配置 | 优先用 `X2-Turn/install.sh` | turn-demo 跑通 |
+| ☐ | P0.2.1 环境配置 | **官方路径**：`conda env create -f X2-Turn/environments/environment-transformers.yml` + `pip install -e "./voxtral-realtime[transformers]"` + `pip install -e "./turn-demo"`（`install.sh` 是 fork 自制，仅作备选） | turn-demo 跑通 |
 | ☐ | P0.2.2 加载 base | `load_mtp_checkpoint("x-square-robot/X2-Turn-4B-0812")` | bf16 载入成功，显存 ≈8 GB |
 | ☐ | P0.2.3 复现帧级输出 | `scripts/run_backbone.py` | `infer_asr_turn` 输出 80 ms/帧；3.4 s 音频 ≈53 帧 |
 | ☐ | P0.2.4 固化 golden | `tests/golden/backbone.json` | 固定样本的 turn_frames 序列，后续改动的回归基线 |
@@ -762,15 +762,47 @@ loss = 0   · asr_loss                            # 冻结骨干，ASR 不训
 
 **这是回答审稿人「为什么不直接把 `silence_end_frames` 调大」的唯一有力方式。**
 
+> ### ⚠️ 上游已经先调过一次阈值（2026-09-14 核实，务必读）
+>
+> 上游 `01af067`（2026-09-05，"Make v4 dialogue experience reproducible"）把规则控制器
+> 默认值改成了 **`silence_end_frames = 10`（800 ms）**，注释原文：
+> *"live mic: tolerate natural pauses"* —— **即上游用纯规则调参，对「容忍自然停顿」
+> 这个问题做了一次部分缓解**，而这正是本项目声称要解决的问题。
+>
+> 两条硬性后果：
+>
+> | # | 后果 |
+> |---|---|
+> | 1 | **基线必须用 v4 默认值**（见下表）。拿旧值 `silence_end_frames=3` 当基线是**打稻草人**，审稿人一句「你跟未调优的基线比」即可废掉主表 |
+> | 2 | **这其实是收益** —— 上游替我们把「纯调阈值能走多远」这个对照做实了。图上标出 v4 点，即可直接展示「阈值拉到 800 ms 后延迟代价多大、错误打断率只降到哪」，而我们的曲线在其外侧 |
+>
+> 本地 `X2-Turn/` 的 `config.py` / `controller.py` 已同步至 v4，
+> 溯源与逐参数对照见 [`../../THIRD_PARTY.md`](../../THIRD_PARTY.md) §1.2 A / §1.3。
+
+**规则控制器基线的权威取值**（上游 v4，`turn/controller.py:44-56`）：
+
+| 参数 | v4 值 | 等效时长 |
+|---|---|---|
+| `silence_end_frames` | **10** | 800 ms |
+| `tail_min_frames` / `tail_max_frames` / `tail_stable_frames` | **1 / 1 / 1** | 80 ms |
+| `short_tail_min_frames` / `short_tail_max_frames` | **3 / 5** | 240 / 400 ms |
+| `acoustic_vad_max_hold_frames` | **3** | 240 ms veto 上限 |
+
 ```
 横轴：响应延迟中位
 纵轴：错误打断率
-散点：扫 silence_end_frames ∈ {2..10} × tail_max_frames ∈ {3..15} 的固定阈值组合
+散点：扫 silence_end_frames ∈ {2..16} × tail_max_frames ∈ {1..15} 的固定阈值组合
       → 连成 Pareto 前沿
+◆    ：★ 上游 v4 默认值（10, 1）—— 必须单独标注并在正文点名
 星号：我们的自适应模型
 ```
 
-**验收**：自适应模型落在固定阈值 Pareto 前沿**外侧**。
+> **扫描范围已从 `{2..10}×{3..15}` 放宽到 `{2..16}×{1..15}`** ——
+> 否则 v4 的 `tail_max_frames=1` 落在原范围之外，图上标不出这个关键参照点。
+
+**验收**：
+- 自适应模型落在固定阈值 Pareto 前沿**外侧**
+- **且相对 v4 默认值这一具体点有改进**（不只是相对前沿的某个极端点）
 
 ## 4.5 消融
 
@@ -830,14 +862,22 @@ loss = 0   · asr_loss                            # 冻结骨干，ASR 不训
 
 ```
 ci_logits → p(continue) → 调制 FrameTurnConfig：
-                            silence_end_frames (240 ms)
-                            tail_max_frames    (400 ms)
+                            silence_end_frames (v4 默认 10 = 800 ms)
+                            tail_max_frames    (v4 默认 1  =  80 ms)
                           factor = 1 + g·conf·(2p−1)，clamp
 ```
 
+> ⚠️ **基准值已更新为上游 v4**（2026-09-14）。旧版本此处写的是 240 ms / 400 ms，
+> 那是上游 `01af067` 之前的默认值，**已废弃**。
+> 用旧值设计调制范围会导致：模型在 v4 基线上「往长了调」的空间被严重高估
+> （800 ms 已经很长），而「往短了调」才是主要收益方向 —— **这会改变 `g` 的取值与 clamp 边界**。
+> 逐参数对照见 [`../../THIRD_PARTY.md`](../../THIRD_PARTY.md) §1.3。
+
 **模型负责判决，控制器负责时序。** 照抄仓库现有的外部信号注入模式：
-`AcousticVoiceGate`（`server.py:102` → `on_frame(..., acoustic_active)`），
-接入点全仓库仅一处（`server.py:115-120`）。
+`AcousticVoiceGate`（`server.py:102` 每帧求值 → `server.py:115-120` 注入 `on_frame`），
+接入点全仓库仅一处。**其 veto 上限逻辑（`controller.py:110-118`）正是纪律 3
+「外部信号只能延缓、不能无限阻断」的现成写法，直接复用。**
+完整锚点见 [`../docs/code-anchors.md`](../docs/code-anchors.md) §1。
 
 ## 5.2 论文
 
@@ -961,7 +1001,7 @@ AV-SemanticVAD/
 SemanticVAD/                  ← git root
 ├── THIRD_PARTY.md            ← 第三方溯源清单（SHA / 许可 / 只读约定）
 ├── AV-SemanticVAD/           ← 本项目（上面的树）
-├── X2-Turn/                  ← 只读，base 权重来源            @53d3b9a
+├── X2-Turn/                  ← 只读，base 权重来源     上游 @8992c7c
 ├── SoulX-Duplug/             ← 只读，范式参考（推理服务）      main @45bd237
 └── SoulX-Duplug-training/    ← 只读，★ 训练代码参考   training-code @928b065
 ```
