@@ -118,3 +118,6 @@ secrets/
 # ============================================================
 /HY-ASR/
 HY-ASR/
+
+# 本机权重软链（指向 /home/thundrzhang/X2-Turn/models，见 server-setup）
+/X2-Turn/models

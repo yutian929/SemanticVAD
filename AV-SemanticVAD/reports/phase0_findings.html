@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SemanticVAD · Phase 0 探针结论</title>
+<style>
+  :root{
+    --ink:#1a2233; --muted:#5b6675; --line:#e3e8ef; --bg:#f6f8fb;
+    --accent:#2f6df6; --good:#12924b; --warn:#c4341c; --soft:#eef3ff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,"Segoe UI",Roboto,"Helvetica Neue","PingFang SC","Microsoft YaHei",sans-serif;
+    line-height:1.65;font-size:15px}
+  .wrap{max-width:900px;margin:0 auto;padding:40px 28px 80px}
+  header{border-bottom:3px solid var(--accent);padding-bottom:18px;margin-bottom:8px}
+  h1{font-size:26px;margin:0 0 6px}
+  .sub{color:var(--muted);font-size:14px}
+  h2{font-size:19px;margin:34px 0 12px;padding-left:10px;border-left:4px solid var(--accent)}
+  h3{font-size:15.5px;margin:20px 0 6px}
+  p{margin:8px 0}
+  .lead{background:var(--soft);border:1px solid #d6e2ff;border-radius:10px;padding:14px 18px;margin:18px 0}
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}
+  .card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:14px}
+  .card .n{font-size:22px;font-weight:700}
+  .card .l{font-size:12.5px;color:var(--muted);margin-top:2px}
+  table{border-collapse:collapse;width:100%;margin:12px 0;background:#fff;
+    border:1px solid var(--line);border-radius:8px;overflow:hidden;font-size:14px}
+  th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--line)}
+  th{background:#eef1f6;font-weight:600}
+  tr:last-child td{border-bottom:none}
+  .mono{font-family:"SF Mono",Menlo,Consolas,monospace}
+  .good{color:var(--good);font-weight:600}.warn{color:var(--warn);font-weight:600}
+  .step{display:flex;gap:14px;margin:14px 0;align-items:flex-start}
+  .step .k{flex:0 0 30px;height:30px;border-radius:50%;background:var(--accent);color:#fff;
+    display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px}
+  .step .b{flex:1}
+  .box{border-radius:10px;padding:14px 18px;margin:16px 0}
+  .box.honest{background:#fff7ed;border:1px solid #fed7aa}
+  .box.next{background:#ecfdf3;border:1px solid #a7e8c3}
+  .tag{display:inline-block;font-size:11.5px;padding:2px 8px;border-radius:20px;
+    background:#eef1f6;color:var(--muted);margin-left:6px;vertical-align:middle}
+  figure{margin:16px 0;background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px}
+  figcaption{font-size:13px;color:var(--muted);margin-top:8px;text-align:center}
+  .legend{display:flex;gap:18px;justify-content:center;font-size:12.5px;margin-top:6px;flex-wrap:wrap}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .sw{width:16px;height:3px;display:inline-block;border-radius:2px}
+  footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);
+    color:var(--muted);font-size:12.5px}
+  code{background:#eef1f6;padding:1px 5px;border-radius:4px;font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>SemanticVAD · Phase 0 探针结论</h1>
+  <div class="sub">视觉引导的语义话轮判断（complete / incomplete）· 前置探针阶段汇报 · 2026-09-14</div>
+</header>
+
+<div class="lead">
+  <b>一句话结论：</b>在<b>干净</b>音频上，现成的强音频模型（X2-Turn-4B）判断"用户说完没有"已<b>接近天花板（AUC≈0.99）</b>，
+  视觉在此几乎没有空间；但在<b>竞争说话人噪声</b>下，音频的完整性判断能力<b>崩塌到接近随机</b>——
+  <b>这才是视觉可能真正有价值的地方</b>。据此我们把课题 framing 从"视觉帮语义判断"调整为
+  <b>"当音频被干扰、完整性信号塌掉时，用视觉维持话轮判断"</b>。
+</div>
+
+<div class="grid">
+  <div class="card"><div class="n">0.99</div><div class="l">干净条件音频 AUC<br>（接近天花板）</div></div>
+  <div class="card"><div class="n warn">0.47</div><div class="l">竞争说话人 SNR0<br>音频真语义 AUC（近随机）</div></div>
+  <div class="card"><div class="n">617</div><div class="l">探针样本<br>(318 完整 / 299 不完整)</div></div>
+  <div class="card"><div class="n good">✓</div><div class="l">视觉主场<br>必要条件已验证</div></div>
+</div>
+
+<h2>1. 我们想回答什么</h2>
+<p>课题目标：给一个<b>已冻结的音频话轮模型</b>加一路轻量视觉，改善"用户说完了没有"的判断（避免抢话打断）。
+但在投入数月训练前，必须先用低成本探针回答一个问题：<b>音频到底强不强？视觉还有没有空间？</b>
+——因为已有文献普遍显示，干净条件下视觉增益只有 +1~2%，且多来自抗噪而非语义。</p>
+
+<h2>2. 关键发现（四步）</h2>
+
+<div class="step"><div class="k">1</div><div class="b">
+  <h3>干净条件：音频已接近天花板 <span class="tag">探针 A</span></h3>
+  用冻结 X2-Turn 的隐层表征训一个线性分类器判 complete/incomplete，
+  在 617 条孤立语句上 <b>AUC ≈ 0.99</b>（严格剔除"时长"这个混淆因素后仍在 <span class="mono">[0.77, 0.99]</span>）。
+  <b>结论：干净条件下音频几乎全知道，视觉在语义线上空间极小。</b>
+</div></div>
+
+<div class="step"><div class="k">2</div><div class="b">
+  <h3>句中停顿：音频没被骗 <span class="tag">Gate · 中文对话</span></h3>
+  在"用户话说到一半停顿"的样本上逐帧检查：只要停顿前是<b>词法明显未完</b>的悬空词
+  （"比<b>较</b>…""是<b>否</b>…"），强语言模型直接判对，停顿处不误报"说完"。
+  <b>结论：容易的思考停顿，音频也能搞定 —— 视觉的空间比想象更窄。</b>
+</div></div>
+
+<div class="step"><div class="k">3</div><div class="b">
+  <h3>竞争说话人噪声：音频崩塌 <span class="tag">噪声 Gate · 关键</span></h3>
+  把干净语句混入一个竞争说话人（AV-Dialog 中视觉 +13% 的场景），逐级加大干扰后重测。
+  音频的<b>真语义可分性单调崩塌</b>（见下图），SNR 0 时降到 <b>0.47（接近随机）</b>；
+  而"仅凭时长"的基线纹丝不动（0.863）——证明这是<b>噪声毁掉了语义信息，不是数据伪迹</b>。
+  <b>结论：音频在声学退化下确实失效 → 视觉有了真正的主场。</b>
+</div></div>
+
+<div class="step"><div class="k">4</div><div class="b">
+  <h3>据此确定新 framing</h3>
+  不是"视觉帮语义判断"（干净条件已被证明没空间），而是
+  <b>"当音频被竞争说话人 / 噪声干扰、完整性信号塌掉时，视觉（不受声学噪声影响）维持话轮判断。"</b>
+  这个方向同时有<b>我们的探针</b>和<b>先行文献</b>（AV-Dialog 干扰说话人 +13%）支撑。
+</div></div>
+
+<h2>3. 核心图表：音频完整性判断随噪声退化</h2>
+<figure>
+<svg viewBox="0 0 520 280" width="100%" role="img" aria-label="AUC vs SNR degradation curve">
+  <!-- axes -->
+  <line x1="60" y1="20" x2="60" y2="240" stroke="#c7cfda" stroke-width="1"/>
+  <line x1="60" y1="240" x2="470" y2="240" stroke="#c7cfda" stroke-width="1"/>
+  <!-- y gridlines + labels -->
+  <g font-size="11" fill="#8a94a3">
+    <line x1="60" y1="20"  x2="470" y2="20"  stroke="#eef1f6"/><text x="30" y="24">1.0</text>
+    <line x1="60" y1="93"  x2="470" y2="93"  stroke="#eef1f6"/><text x="30" y="97">0.8</text>
+    <line x1="60" y1="167" x2="470" y2="167" stroke="#eef1f6"/><text x="30" y="171">0.6</text>
+    <line x1="60" y1="203" x2="470" y2="203" stroke="#f0d0c8"/><text x="30" y="207">0.5</text>
+    <text x="30" y="243">0.4</text>
+  </g>
+  <!-- x labels -->
+  <g font-size="11.5" fill="#5b6675" text-anchor="middle">
+    <text x="60"  y="258">干净</text>
+    <text x="197" y="258">SNR 10</text>
+    <text x="333" y="258">SNR 5</text>
+    <text x="470" y="258">SNR 0</text>
+  </g>
+  <!-- length-only baseline (flat 0.863) -->
+  <polyline points="60,70 197,70 333,70 470,70" fill="none" stroke="#9aa4b2" stroke-width="2" stroke-dasharray="5 4"/>
+  <!-- feat_last full -->
+  <polyline points="60,22 197,26 333,37 470,57" fill="none" stroke="#2f6df6" stroke-width="2.5"/>
+  <g fill="#2f6df6"><circle cx="60" cy="22" r="3.5"/><circle cx="197" cy="26" r="3.5"/><circle cx="333" cy="37" r="3.5"/><circle cx="470" cy="57" r="3.5"/></g>
+  <!-- length-removed genuine -->
+  <polyline points="60,104 197,140 333,167 470,213" fill="none" stroke="#c4341c" stroke-width="2.5"/>
+  <g fill="#c4341c"><circle cx="60" cy="104" r="3.5"/><circle cx="197" cy="140" r="3.5"/><circle cx="333" cy="167" r="3.5"/><circle cx="470" cy="213" r="3.5"/></g>
+  <!-- value labels for genuine line -->
+  <g font-size="11" fill="#c4341c" text-anchor="middle" font-weight="600">
+    <text x="60" y="98">.77</text><text x="197" y="134">.67</text><text x="333" y="161">.60</text><text x="470" y="207">.47</text>
+  </g>
+</svg>
+<div class="legend">
+  <span><i class="sw" style="background:#c4341c"></i>真语义信号（剔除时长）— <b>关键</b></span>
+  <span><i class="sw" style="background:#2f6df6"></i>原始 AUC（含时长地板）</span>
+  <span><i class="sw" style="background:#9aa4b2"></i>仅时长基线（对照）</span>
+</div>
+<figcaption>纵轴 = 判 complete/incomplete 的 AUC；横轴 = 竞争说话人干扰强度（越右越吵）。
+红线（真正的语义可分性）随噪声单调崩到近随机，灰线（仅时长）不动 → 崩塌来自噪声毁语义。</figcaption>
+</figure>
+
+<h2>4. 数据明细</h2>
+<h3>探针 A（干净，Easy-Turn 617 条）</h3>
+<table>
+  <tr><th>特征</th><th>AUC</th><th>说明</th></tr>
+  <tr><td>音频 hidden（判决点）</td><td class="good">0.994</td><td>近乎完美可分</td></tr>
+  <tr><td>模型自带话轮头</td><td>0.778</td><td>信息在 hidden 里，现成读出头未充分暴露</td></tr>
+  <tr><td>仅时长（混淆基线）</td><td>0.863</td><td>已识别并全程控制</td></tr>
+</table>
+<h3>噪声 Gate（竞争说话人）</h3>
+<table>
+  <tr><th>条件</th><th>原始 AUC</th><th>仅时长</th><th>真语义（剔除时长）</th></tr>
+  <tr><td>干净</td><td>0.994</td><td>0.863</td><td class="good">0.772</td></tr>
+  <tr><td>SNR 10 dB</td><td>0.984</td><td>0.863</td><td>0.673</td></tr>
+  <tr><td>SNR 5 dB</td><td>0.954</td><td>0.863</td><td>0.598</td></tr>
+  <tr><td>SNR 0 dB</td><td>0.898</td><td>0.863</td><td class="warn">0.474</td></tr>
+</table>
+
+<div class="box honest">
+  <b>⚠️ 诚实的边界（务必对 mentor 说清）</b>
+  <ul style="margin:8px 0 0">
+    <li><b>已证明</b>：音频在竞争说话人下完整性判断失效（视觉主场的<b>必要条件</b>）。</li>
+    <li><b>尚未证明</b>：视觉<b>能否补回</b>这部分信号（充分条件）——需要<b>带视频的音视频数据</b>才能验。</li>
+    <li>目前实验用的是孤立语句 + 合成竞争说话人；最终结论需真实音视频对话 + 真实噪声复核。</li>
+    <li>因此现在<b>既不宣称视觉贡献成立、也不宣称课题失败</b>——两头都还没到。</li>
+  </ul>
+</div>
+
+<h2>5. 下一步</h2>
+<div class="box next">
+  <b>充分性验证</b>：取带视频的音视频数据（MM-F2F 子集 / 自采小样），在噪声条件下测
+  <b>视觉能否补回音频丢失的完整性信号</b>。
+  <ul style="margin:8px 0 0">
+    <li>能补回 → 贡献成立，课题落到"声学退化下用视觉维持话轮判断" + 配套数据集。</li>
+    <li>补不回 → 诚实转"数据集 + negative result"（仍是可发表的下限）。</li>
+    <li>并行启动外部长依赖：数据许可核验 + 伦理审批（自采部分）。</li>
+  </ul>
+</div>
+
+<p style="color:var(--muted);font-size:13.5px">
+<b>方法论价值</b>：这些结论用约一天的探针（不训练、不标注）得到，
+避免了"直接训练四个月才发现干净条件只有 +1%、再被现有文献反驳"的高成本弯路。
+</p>
+
+<footer>
+  可复现：探针脚本 <code>AV-SemanticVAD/scripts/probe_*.py</code>；结果 <code>AV-SemanticVAD/results/</code>；
+  完整执行日志 <code>AV-SemanticVAD/plan/implementation-execution/phase0.md</code>；
+  权威计划与 changelog <code>AV-SemanticVAD/plan/implementation-plan.md</code>。<br>
+  基座模型 X2-Turn-4B-0812（全程冻结，未修改）· 双卡 H20 · 2026-09-14。
+</footer>
+
+</div>
+</body>
+</html>
