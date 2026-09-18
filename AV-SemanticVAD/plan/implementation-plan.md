@@ -2,22 +2,27 @@
 
 > **本文件是项目的唯一权威计划。** 与其他文档冲突时以本文件为准。
 >
-> **方案**：以 **X2-Turn-4B-0812 权重**为 base 全部冻结，套 **SoulX-Duplug 范式**
-> （冻结视觉前端 + 可训 Projector + LoRA）侧接一路视觉，
-> 在 `vad_lm_head` 空闲 token id 上**判别式**输出逐帧 complete/incomplete。
+> **⚠️ 方向转向（2026-09-18，CVPR 主目标确认）**：本项目已从「单说话人 · 冻结 X2-Turn 旁挂一路视觉 · 判 complete/incomplete」
+> 转向 **「多人入境 · 端到端联合 AV 融合 · chunk 级 per-face 判「谁在说 × 语义完整性」」**，目标会议改为 **CVPR 2027**。
+> 依据见 [`implementation-execution/phase2.md`](implementation-execution/phase2.md)（方向转向 + 深度竞品调研 + AV-Dialog 深挖）。
+> **下方 Phase 1–5 的具体架构（冻结骨干 / 单 ci 头 id 41,42 / SoulX 范式 / MM-F2F 英文主训练）多数将被重修** ——
+> 放开冻结范式、从头构建+训练、数据集自建；**架构与 Phase 细节待 [`architecture.md`](architecture.md) 讨论后更新**。
+> 在此之前，§0.1 三点贡献与竞品定位（§0.1.1 / §5.2.3）**已按新方向重写、为最新权威**；Phase 1–5 旧文暂留作历史参照。
+>
+> **旧方案（历史，待重修）**：以 X2-Turn-4B-0812 冻结为 base，套 SoulX-Duplug 范式侧接一路视觉，在 `vad_lm_head` 空闲 id 上判别式输出逐帧 complete/incomplete。
 >
 > | | |
 > |---|---|
-> | 目标会议 | **IROS** |
-> | 周期 | 约 6 个月（W1–W24） |
+> | 目标会议 | **CVPR 2027**（截稿约 2026-11；原 IROS 已切换） |
 > | 算力 | **双卡 H20（96 GB/卡）** |
-> | 语言 | **英文（MM-F2F 主训练）**＋ 中文（仅自采/评测，无现成大规模源，见 §1.1） |
-> | 架构细节 | [`architecture.md`](architecture.md) |
+> | 数据 | **自建多人 per-face 双轴 AV 语料**（active-speaker × 语义完整性）＋ 复用/扩展 AVCocktail 做评测（可行性待核，见 phase2.md 待办） |
+> | 架构细节 | [`architecture.md`](architecture.md)（**待按新方向重写**） |
 > | 服务器部署 | [`../docs/server-setup.md`](../docs/server-setup.md) |
 > | 代码位置索引 | [`../docs/code-anchors.md`](../docs/code-anchors.md) |
 >
-> **最后更新**：2026-09-04
+> **最后更新**：2026-09-18
 > **执行 changelog**：
+> - **2026-09-18** — ★ **方向转向 CVPR 2027**（多人 per-face AV：谁在说 × 语义完整性）。放开冻结范式、从头训练、数据集自建。C1/C2/C3 与竞品表（§0.1 / §0.1.1 / §5.2.3）已重写；深度竞品调研 + AV-Dialog 全文深挖见 phase2.md。Phase 1–5 架构待 architecture.md 讨论后重修。
 > - **2026-09-14** — Phase 0 探针跑完，对 C2 卖点有重大影响，见下方「执行发现」。
 > - **2026-09-16** — ⚠️ 核实原始来源订正三处：① **MM-F2F 是英文语料，非中文**（README/论文原文 "in-the-wild online **English** conversation videos"）；② MM-F2F **不发布媒体**，只发标注 CSV + YouTube 链接 + 脚本，视频须按 `video_id` 自下（生 YouTube，**非去标识化**）→ 原「用它可绕开人脸合规风险」的结论**不成立**；③ 决策：**英文一条线先跑通**（MM-F2F 主），中文暂无现成大规模源，只能靠自采/Full-Duplex-Bench-zh，待英文跑通后再定。
 
@@ -81,9 +86,12 @@
 
 | # | 贡献 | 形态 | 可信度支点 |
 |---|---|---|---|
-| **C1** | **AVSC-Corpus**：首个带**语义完整性**（complete/incomplete）标注的**视听**语料，中/英双语 | HF Dataset + 标注工具 + Datasheet | 弱标注全量铺开 + 测试集全人工 + 双人 κ + **双轴标注**（§1.3） |
-| **C2** | **AV-X2-Turn**：冻结骨干上的轻量视觉扩展（Projector + LoRA + 征用空闲 id 的判别头） | 代码 + 权重 | 同构消融（同权重 mask 掉视觉即 −视觉臂） |
-| **C3** | **真机系统评测**：错误打断率 / 响应延迟 / 固定阈值 Pareto / 降级安全 | demo 视频 + 指标表 | 与规则控制器**上游 v4 默认配置**同台（§4.4，**不得用已废弃的旧默认值**），人类参考上界 |
+| **C1** | **多人 per-face 语义完整性视听基准**：首个在多人同框视频上、对**每张脸**联合标注**双轴**（active-speaker「谁在说」× semantic completeness「语义闭合没」）的 chunk 级流式基准；概念上首次把「语义完整性 vs 行为结果 vs VAD」三轴区分落到 **video / 多脸** | HF Dataset + 标注工具 + Datasheet | **无任何现成语料覆盖此交集**（GRASS 纯音频/德/95min；AVCocktail 无完整性/无 ASD 任务）→ 自建必需；测试集全人工 + 双人 κ + 双轴（§1.3） |
+| **C2** | **per-face 联合 AV 模型**：端到端联合融合，chunk 级流式输出**每张脸独立**的 {静默 / 说话-incomplete / 说话-complete}；视觉作归属消歧、音频判完整性（探针实证的模态分工） | 代码 + 权重 | 与 **MuVAP 的结构性差异**（不塌成 floor-holder，真 per-face、任意 N）；同构消融（mask 视觉即 −视觉臂） |
+| **C3** | **实证发现 + 分析（punchline）**：现成 SOTA AV 话轮模型（VAP 家族 MuVAP / MM-VAP）在多人**语义完整性**上**近随机**，本方法恢复 X%；模态分工 + 条件切片（重叠/噪声/遮挡/侧脸）分析 | 指标表 + 消融（+ 真机 demo 作**补充材料**） | 复用 AVCocktail 公开 VAP checkpoint 作 baseline；探针 A/B 证据支撑「视觉→谁、音频→完整性」 |
+
+> **★ 三条互锁**：C1 造出别人没有的地（数据 + 任务），C2 是唯一能在这地上跑的方法（真 per-face，非塌态），C3 用数字证明旧 SOTA 在这地上垮掉、我们不垮。
+> **CVPR 语境下 C3 从「真机系统」改为「实证发现 + 分析」**（真机 demo 降为补充材料，非承重贡献）。
 
 ## 0.1.1 ★ C1 的精确措辞与论证（2026-09-04 核实后重写）
 
@@ -130,13 +138,17 @@ Kurata 是教师-学生在线面试，老师的耐心/礼貌会系统性偏置�
 
 ### Related Work 定位表（论文里直接用）
 
-| 语料 | 语义完整性标注 | 视频 | 公开 | 规模 | 语言 |
-|---|---|---|---|---|---|
-| **GRASS** [2504.09980] | ✅ κ=0.875 | ❌ | ✅ | 95 分钟 | 奥地利德语 |
-| **Kurata'23** [Interspeech'23] | ❌ **行为结果** | ✅ | ❌ NEDO 内部 | 21.7 K 片段 | 日本人说英语（面试） |
-| MM-F2F [2505.12654] | ❌ KEEP/TURN/BC | ✅ | ✅ | 51 K turn | **英文** |
-| AV-Dialog [2511.11124] | ❌ `<SOT>`/`<SOB>` | ✅ | ⚠️ 仅项目页 | — | 英语 |
-| **AVSC-Corpus（我们）** | ✅ **+ 双轴** | ✅ | ✅ | ≥30 K 事件 | **中 + 英** |
+| 语料/工作 | 语义完整性标注 | 视频 | 多人 / per-face | 公开 | 规模 | 语言 |
+|---|---|---|---|---|---|---|
+| **GRASS** [2504.09980] | ✅ κ=0.875 (PCOMP) | ❌ | ❌ | ✅ | 95 分钟 | 奥地利德语 |
+| **Kurata'23** [Interspeech'23] | ❌ **行为结果** | ✅ | ❌ | ❌ NEDO 内部 | 21.7 K 片段 | 日本人说英语（面试） |
+| MM-F2F [2505.12654] | ❌ KEEP/TURN/BC | ✅ | ❌ 双人 | ✅（仅标注+链接） | 51 K turn | **英文** |
+| AV-Dialog [2511.11124] | ❌ 行为 `<SOT>`/`<SOB>` | ✅ 唇动 | ❌ **单目标** | ⚠️ 仅项目页 | — | 英语 |
+| MuVAP [2606.16731] | ❌ VAP 行为 | ✅ 人脸轨迹 | ⚠️ speaker-aware 但**塌成 2 态** | ✅ 附 31h 语料 | 31 小时 | — |
+| AVCocktail [Interspeech'25 / 2609.17056] | ❌ VAP shift/hold | ✅ per-face 224² | ✅ 真多人(≤8) 但**实验只取双人** | ✅ | ~9.7 小时 | 待核 |
+| **本项目基准（我们）** | ✅ **per-face 双轴** | ✅ | ✅ **多人 · 每脸独立** | ✅ | 待定 | 中 / 英（待定） |
+
+> **交集全空**：语义完整性（只有 GRASS）× 真 per-face（无人做，MuVAP 都塌成 2 态）× 多人 AV —— 三者合一无先例。
 
 ### 定稿措辞
 
@@ -928,29 +940,32 @@ ci_logits → p(continue) → 调制 FrameTurnConfig：
 
 ## 5.2 论文
 
-**Title**：*Visually-Grounded Semantic Endpointing for Robot Speech Interaction*
+**Title（草案）**：*Who Is Speaking and Are They Done? Per-Face Audio-Visual Semantic Endpointing in Multi-Party Conversation*
+（旧 IROS 标题 *Visually-Grounded Semantic Endpointing for Robot Speech Interaction* 已弃）
 
 | ☐ | 任务 |
 |---|---|
-| ☐ | 5.2.1 三点贡献（C1 数据 / C2 方法 / C3 真机） |
+| ☐ | 5.2.1 三点贡献（C1 多人 per-face 双轴基准 / C2 per-face 联合 AV 模型 / **C3 实证发现+分析**；真机 demo 作补充材料） |
 | ☐ | 5.2.2 Related Work：补 X2-Turn(2608.10878)、SoulX(2603.14877) 全文表格 + **§0.1.1 的语料定位表** |
 | ☐ | 5.2.3 差异化表述（见下） |
 | ☐ | 5.2.4 Limitation 如实写 clean 增益、**仅中英两语**、单一 base、**轴 2 为自动标注（未人工复核全量）** |
 | ☐ | 5.2.5 Demo 视频：思考停顿不被打断 vs 基线抢话 |
 | ☐ | 5.2.6 发布：HF(model+dataset) + GitHub(代码+标注工具) |
 
-**5.2.3 必须处理的四条外部声称**：
+**5.2.3 必须处理的外部声称（2026-09-18 按新方向重写，深挖见 phase2.md §2.1/§2.3）**：
 
-| 竞品 | 声称 | 我们的表述 |
+| 竞品 | 声称 | 我们的表述（差异化） |
 |---|---|---|
-| **AV-Dialog** [2511.11124] | 视听 + "semantically grounded turn-boundary detection" | 其输出为 `<SOT>/<SOB>` 事件，**无 complete/incomplete 判决**；需 8B + 128×A100 重训；AV-HuBERT 引入 120 ms 前视；**仅唇部特征**（作者自列 limitation） |
-| **★ Kurata'23** [Interspeech'23] | 视听 + "end-of-utterance prediction" | **最接近的先行工作，必须正面且尊重地处理**。它确实是视听 + 静音点触发，但标注的是**行为结果**（continue/end，由对方是否接话决定），坍缩了语义完整/不完整（§0.1.1）；此外：语料未公开（NEDO 内部）、IPU 触发非帧同步、非 LLM（wav2vec2+BERT+X3d 拼接）、场景为教师-学生在线面试。**我们引用其视觉线索消融结论作为设计依据**（眼>嘴>头姿），并用 §4.5.7 实证标注轴的影响 |
-| **Qwen3.5-Omni** [2604.15804] | "native turn-taking intent recognition" | **215 项评测中零个话轮/端点任务，该能力未获实验支撑**；第三方评测 [2606.26083] 显示该系列存在感知—行动脱节；**权重仅 API，无法作为可扩展研究基座** |
-| **MiniCPM-o 4.5** [2604.27393] | "减少对外部 VAD 模块的依赖" | 其全双工评测在**无音频**的 LiveSports-3K-CC 上；自身消融显示 chunk 缩到 0.2 s 即崩塌 |
+| **MuVAP** [2606.16731]（最像） | AV 单麦+单摄 · 多人 · HRI 话轮 | 只预测**行为 Shift-Hold / next-speaker**（VAP），**不判语义完整性**；把 N 人**塌成"当前 vs 下一 floor-holder"2 态**，非 per-face。我们：正交的**语义完整性轴** + **真 per-face 独立输出**。**卖点绝不写成"AV 多人话轮"** |
+| **AV-Dialog** [2511.11124]（最危险） | "**semantically grounded** turn-boundary detection" + AV + 流式 | 全文核实：输出为**行为事件 token `<SOT>`/`<SOB>`**（PairwiseTurnGPT 行为分类），"grounded"仅指**以转写语义为条件**，**从不判 complete/incomplete**；**单目标说话人**（干扰当噪声抑制）、唇动、**dyadic**。我们：**per-face 多人 × 语义完整性判决**。⚠️ **必须点名拆解"semantically grounded"**以防审稿误判撞车 |
+| **MM-VAP** [2607.07294] | AV 话轮预测 | 硬编码 2 人（256 态未来语音活动）；"semantic consistency loss"仅为 VAP 状态**正则项**，非完整性目标 |
+| **AVCocktail** [2609.17056 / Interspeech'25] | AV 多人 cocktail-party 话轮测试床 | 沿用 **VAP shift/hold**、**无 ASD 任务**（吃预切脸）、**无完整性标注**、实验只取双人 → **可复用其数据/VAP checkpoint 作 baseline 与 C3 对照**，我们补齐 per-face 双轴 |
+| **★ Kurata'23** [Interspeech'23] | 视听 + "end-of-utterance prediction" | 标注**行为结果**（continue/end，由对方是否接话决定），坍缩语义完整/不完整（§0.1.1）；语料未公开、IPU 触发非帧同步、非 LLM。**引用其视觉线索消融序（眼>嘴>头姿）作设计依据** |
+| Qwen3.5-Omni [2604.15804] / MiniCPM-o [2604.27393] | "native turn-taking" / "减少 VAD 依赖" | 权重仅 API 或评测不含真话轮/端点任务，无法作可扩展基座；均非多人 per-face 语义完整性 |
 
-**不要**声称「首个视觉引导语义 VAD」。差异化落在
-**轻量 / 免重训 / 零前视 / 可部署 / 有配套数据**。
-C1 的首创声明限定在**「语义完整性标注 + 视听」的交集**上（§0.1.1 定稿措辞）。
+**首创声明限定**：只说 **「首个多人 per-face 语义完整性（active-speaker × completeness）视听基准 / 模型」**（§0.1.1）。
+**不要**写"首个 AV 流式话轮模型"（AV-Dialog 已占"首个 AV 流式全双工对话系统"），也不要写"首个视觉引导语义 VAD"。
+差异化护城河 = **语义完整性轴 + 真 per-face + 多人视频**，辅以轻量 / 可解释。
 
 ---
 
