@@ -30,7 +30,7 @@
 | AV-Dialog 全文方法深挖（最高杠杆待办） | ✅ 完成（§2.3）：行为事件token/单目标/dyadic，不威胁 C1 |
 | 重叠段完整性"恢复实验"（AMI 单人/重叠分档） | ⏳ 待做 |
 | 数据集方案（自建 vs 复用 AVCocktail 加双轴标注） | ⏳ 待定 |
-| 架构定稿（per-face 三态头 / 多流 / 重叠段策略） | ⏳ 待定 |
+| 架构定稿（v5 最简版） | 🔄 已收敛并写入 architecture.md/HTML；**唯一悬置=forward 输出形态**（§2.4） |
 
 ---
 
@@ -209,6 +209,23 @@ face_k ─►[视觉编码器]─► q_k ─┘                         └► {
 
 **净结论**：C1 的"首个"站得住，前提 = 严格限定在"语义完整性 × per-face × 多人视频"的交集，
 并在 Related Work 显式拆解 AV-Dialog。竞品调研的最后一个高不确定点落定。
+
+---
+
+## 2.4 — 架构讨论进度（2026-09-18，暂告段落）
+
+与用户逐步讨论收敛出 **v5 最简架构**，已写入 [`../architecture.md`](../architecture.md) 与 [`../architecture-diagram.html`](../architecture-diagram.html)：
+- **端到端、Route A**（热启动 Voxtral/X2-Turn，非从零）；参考 X2-Turn 的端到端做法（共享 hidden 上多判别头）。
+- **输入锁定**：多人**混合音频** + 单目 **RGB**（假设人一定在画面内；不用麦阵/DoA/朝向）。
+- **简化（用户拍板）**：视觉只用**一个 RGB 编码器**（内部人脸检测→每人 token），**删去** 几何/唇双分支、addressee、身份 enroll、DoA、body-pose、4 态、L0 闸。
+- **结构**：音频→骨干→`H[t]`；RGB→视觉编码器→每人 token 作 Q → **per-face cross-attn 读出**（变长 K、每人独立）。
+- **模型层 vs 系统层（用户强调）**：模型 forward **只吐 logits**；"logits→转写/完整性"另作系统层解码。HTML 三张图的模型部分都止于 forward 的 logits。
+- **logit 语义**：训练用标签把词表槽位"指派"成 complete/incomplete；完整性信息本在 hidden（探针 A 0.99）。
+
+**★ 唯一悬置的架构决策（下次继续）= 我们 forward 的输出形态**（architecture.md §5）：
+① 粒度：K 套 per-face（各自 ASR+状态） vs 单流 ASR + 指派头；
+② 状态读出：判别式(读保留槽,仿 X2-Turn) vs 生成式(状态 token,仿 SoulX)。
+暂定倾向判别式；粒度待定。定稿后回填 architecture.md §5 + §2 forward 框 + HTML 主图终点。
 
 ---
 

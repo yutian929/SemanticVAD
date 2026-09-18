@@ -1,30 +1,31 @@
-# AV-SemanticVAD 架构设计（v5 · 多人 per-face 端到端）
+# AV-SemanticVAD 架构设计（v5 · 多人逐人 · 最简版）
 
 > # ✅ 现行权威架构（2026-09-18）
-> **多人入境 · 端到端联合 AV 融合 · chunk 级 per-face 判「谁在说 × 对不对我说 × 说完没」。**
+> **输入 = 多人混合音频 + 单目 RGB 视频；对画面内每个人，逐 chunk 判「在不在说 · 说了什么(ASR) · 说完没(完整性)」。**
 > 目标会议 **CVPR 2027**。骨干走 **Route A（热启动 Voxtral/X2-Turn，非从零训）**。
 >
+> - 总览图（可交互，含 X2-Turn/SoulX 参考图）：[`architecture-diagram.html`](architecture-diagram.html)
 > - 方向转向与竞品调研：[`implementation-execution/phase2.md`](implementation-execution/phase2.md)
 > - 三点贡献与竞品定位：[`implementation-plan.md`](implementation-plan.md) §0.1 / §0.1.1 / §5.2.3
 > - 旧 v4（冻结单流，已否决端到端）已归档：[`architecture-legacy-v4.md`](architecture-legacy-v4.md)
-> - 架构总览图（可交互）：[`architecture-diagram.html`](architecture-diagram.html)
 >
-> **从 v4 继承仍有效的论证**：判别式读出优于生成式；80ms 前视在该骨干上"免费"；时间粒度不可退让；
-> Kurata 视觉线索消融序（眼>嘴>头姿）；参数量-数据量耦合。
-> **相对 v4 的根本变化**：单流→**多人 per-face**；冻结→**LoRA/微调**；纯音频完整性→**视觉做归属/addressee、音频做完整性**；
-> "旁挂一路视觉判 complete"→**端到端联合、按脸独立输出**。
+> **⚠️ 尚未定：模型 forward 的输出形态**（见 §5）。本文其余部分已定；输出形态定稿后回填 §5 与图。
+>
+> **相对旧 v4 的变化**：单流→**多人逐人（per-face）**；纯音频完整性→**视觉做归属、音频做内容/完整性**；
+> 旁挂一路视觉→**端到端联合**。**本版相对早期草案的简化**：输入只留**多人混合音频 + 单目 RGB**；
+> 视觉只用**一个 RGB 编码器**（删去几何/唇双分支、addressee、身份 enroll、DoA、body-pose）；先做最简。
 
 ---
 
 ## 目录
 - [第 0 部分 · 核心命题与任务定义](#第-0-部分--核心命题与任务定义)
-- [第 1 部分 · 总体架构](#第-1-部分--总体架构)
-- [第 2 部分 · 组件规格](#第-2-部分--组件规格)
-- [第 3 部分 · 时间对齐与流式](#第-3-部分--时间对齐与流式)
-- [第 4 部分 · 参数预算](#第-4-部分--参数预算)
-- [第 5 部分 · 训练](#第-5-部分--训练)
-- [第 6 部分 · 降级保证与模态分工](#第-6-部分--降级保证与模态分工)
-- [第 7 部分 · 与竞品的结构性差异](#第-7-部分--与竞品的结构性差异)
+- [第 1 部分 · 相较现有模型多了什么](#第-1-部分--相较现有模型多了什么)
+- [第 2 部分 · 架构（到 forward 为止）](#第-2-部分--架构到-forward-为止)
+- [第 3 部分 · 参考骨干：X2-Turn / SoulX 的 forward 输出](#第-3-部分--参考骨干x2-turn--soulx-的-forward-输出)
+- [第 4 部分 · 从 logits 到结果（系统层，另做）](#第-4-部分--从-logits-到结果系统层另做)
+- [第 5 部分 · ★ 待定：我们 forward 的输出形态](#第-5-部分--待定我们-forward-的输出形态)
+- [第 6 部分 · 训练](#第-6-部分--训练)
+- [第 7 部分 · 降级与竞品差异](#第-7-部分--降级与竞品差异)
 - [第 8 部分 · 待定口子（TODO）](#第-8-部分--待定口子todo)
 - [附录 · 复用的代码锚点](#附录--复用的代码锚点)
 
@@ -34,8 +35,6 @@
 
 ## 0.1 核心命题（模态分工，探针实证）
 
-四个探针（见 phase0/phase1）连成的因果链决定了架构分工：
-
 | 证据 | 结论 |
 |---|---|
 | 探针 A（干净单人） | 音频完整性 AUC **0.99** → 音频判"说完没"够强 |
@@ -43,163 +42,126 @@
 | 探针 B（视觉→完整性） | **0.42≈随机** → 视觉**不能直接读完整性** |
 | 探针 B（视觉→说话人身份） | acc **0.649** → 视觉**能做归属** |
 
-> **架构第一原则**：**视觉做归属与 addressee（谁在说 / 对不对我说），音频做内容与完整性（说了什么 / 说完没）。**
-> 每个模态只承担被实测证明擅长的轴。视觉把"多人混合"还原成"可归属的单人流"，完整性判断继续由强音频骨干承担。
+> **架构第一原则**：**视觉做归属（谁在说 / 声音归到哪张脸），音频做内容与完整性（说了什么 / 说完没）。**
+> 视觉把"多人混合"还原成"可归属到某张脸的流"；完整性判断仍由强音频骨干承担。
 
-## 0.2 任务定义 = I/O 契约（这也是 C1 基准的标注 schema）
-
-**输入**（流式、因果、80ms 主时钟）：
-- 全局单路**混合音频**（16kHz 波形）。
-- **上游人脸跟踪器**给出的 K 条（变长）**per-face 轨迹**，每条含：唇/脸 crop + 头姿 + 注视 + 身姿朝向 + bbox 几何。
-- （可选）每脸身份嵌入（家庭成员 enroll，绑定下游记忆）；（可选）麦阵 DoA。
-
-**输出**（每 80ms 帧 × 每张脸 k，K 变长）：
-- **核心 4 态**：`{IDLE / SPEAKING_TO_OTHER / ADDRESSING_ME_INCOMPLETE / ADDRESSING_ME_COMPLETE}`
-- **分解辅助头**（供监督/消融，对应 L0/L1/L3）：`p_speak`、`p_addressee|speak`、`p_complete|speak`、`overlap/uncertain` 置信
-- **目标说话人转写**（L2）：对"正在 addressing me"的那张脸出 text
-- **稳定 per-face track-id**（供记忆绑定）
-- **派生 L0 唤起闸** = `max_k p_addressee_k`
-
-四态到机器人动作的映射：IDLE→忽略；SPEAKING_TO_OTHER→不打断/不应；ADDRESSING_ME_INCOMPLETE→继续听、别抢话；ADDRESSING_ME_COMPLETE→可应。
+## 0.2 任务定义（输入/能力）
+- **输入**（流式、因果、80ms）：① 多人**混合音频**（16kHz）；② 单目 **RGB 视频**（多人在画面内）。
+  **假设人一定在画面内**（不做画面外；不用麦阵/DoA/朝向要求）。
+- **能力（系统交付）**：对**画面内每个人**逐 chunk 给出 `{在不在说 · ASR 转写 · complete/incomplete}`。
+- **注意**：这是**系统层交付**；模型 forward 本身只吐 logits（见 §2/§4/§5）。
 
 ---
 
-# 第 1 部分 · 总体架构
+# 第 1 部分 · 相较现有模型多了什么
 
-```
-                         每 80ms 帧 (12.5Hz 主时钟, 因果 + delay-token 前视)
-  混合音频 ─►[Voxtral 音频编码 (热启动)]─┐
-                                         ├─►[Mistral decoder 26层 H=3072 (热启动)]──► 顶层 hidden H[t]
- (E2) 目标脸唇嵌入 ─►[cross-attn adapter ─┘   （已编码语言内容；ASR 路径）        │
-       注入中段几层, 仅 addressing 时激活]                                        │
-                                                                                 │
- ┌───────────────── 视觉前端 (新建/训练) ─────────────────┐                       │
- │ 几何分支: MediaPipe blendshape(口/眼/注视/眉)+头姿+身姿+bbox │─► g_k[t] (≈探针B 24维→MLP) │
- │ 唇分支:  预训练唇前端(AV-HuBERT 视觉塔, 冻结/轻调)         │─► l_k[t] (25Hz→重采样12.5Hz)│
- └────────────────────────────┬────────────────────────────┘                     │
-                               ▼                                                  │
-  每张脸 k:  v_k = [g_k ⊕ l_k]  ─ 作 Q ─►┌ face-query 读出块 (共享权重, 因果) ┐    │
-                                          │  Q = v_k[t-W:t]  K,V = H[t-W:t] ◄──────┘
-                                          └───────────────┬────────────────────┘
-                                                          ▼ s_k[t]
-   判别式多头 (不 generate):
-     · 4态 softmax
-     · 分解辅助头: p_speak · p_addressee|speak (主吃 g_k) · p_complete|speak (主吃 attend 到的 H)
-     · overlap/uncertain 置信
-   派生 L0 唤起闸 = max_k p_addressee_k ；  L2 = lm_head 在 E2 条件下出目标脸转写
-```
-
-**两个视觉入口，只有 E2 碰骨干内部**（沿用 X2-Turn"共享 hidden 上多读一个判别头"的哲学）：
-- **E1 = per-face 状态读出**（不改骨干结构）：K 张脸的状态全部由挂在顶层 `H[t]` 上的 face-query 读出块产生。
-- **E2 = 目标 ASR 条件化**（唯一碰骨干处）：被 addressing 的那张脸的唇流经 cross-attn adapter 注入中段几层，使 ASR 路径 target-speaker-aware。
-
----
-
-# 第 2 部分 · 组件规格
-
-## 2.1 骨干（Route A · 热启动）
-- **VoxtralRealtime / X2-Turn-4B-0812 权重热启动**：音频编码器 → audio embeds 交织进 Mistral decoder（26 层，H=3072），`audio_length_per_tok=8` → **80ms/帧**。
-- ASR 由原生 `lm_head` 承担；完整性从同一 `H` 读出（探针 A：完整性信息已在 hidden 里）。
-- **不从零训**（从零训 ASR 对 CVPR 2027 时间线不可行）。S2 以 **LoRA r=32** 适配（数据足时可全微调，见 §8）。
-
-## 2.2 视觉前端（新建/训练）
-
-### 几何分支 → L0/L1（addressee / active-speaker）
-- **MediaPipe FaceLandmarker**（探针 B 已用）：21 blendshape（口/眼/注视/眉）+ 3 头姿(yaw/pitch/roll) = 24 维 + **bbox 几何**（中心 x,y、尺度→距离/角度）+（增强项）**身姿朝向**（需 body-pose 估计器）。
-- 小 MLP → `g_k[t]`。**CPU 可跑、可解释**；第一人称摄像头下"朝不朝镜头"= addressee 强信号。
-
-### 唇分支 → L2/L3（target-ASR / 完整性微线索）
-- **复用预训练唇前端**（首选 **AV-HuBERT 视觉塔**，冻结、可 S2 轻调），输出唇嵌入 25Hz → 重采样至 12.5Hz → `l_k[t]`。
-- 唇同步给 E2 做"哪把声音属于这张脸"的软分离；唇微动辅助完整性。
-
-## 2.3 face-query 读出块（C2 核心新模块）
-- **输入**：`v_k[t-W:t] = [g_k ⊕ l_k]`，因果窗 W≈1.6s（20 帧）。
-- **机制**：小型**因果 Transformer** 读出块，`Q = v_k[t-W:t]`，`K,V = H[t-W:t]`（骨干顶层 hidden）→ 融合状态 `s_k[t]`。视觉"去 attend 音频的哪一段"= 归属/消歧。
-- **变长 K**：同一套**共享权重**对每张脸并行跑；**绝不塌成 floor-holder**（与 MuVAP 的结构性差异）。
-- **脸间交互**（各脸互相 attend，建模"同一时刻单 floor"）：**默认关**，作消融项。
-
-## 2.4 per-face 判别头（不 generate）
-- 主：4 态 softmax。
-- 辅：`p_speak`、`p_addressee|speak`（主吃 `g_k`）、`p_complete|speak`（主吃 attend 到的 `H`）、`overlap/uncertain` 置信。
-- **判别式**（logits+softmax）→ 低延迟、可降级；沿用 `inference.py:86` 的读出模式。
-
-## 2.5 目标说话人 ASR（L2）
-- 被判 `ADDRESSING_ME` 的脸 → 其唇流经 E2 条件化骨干 → `lm_head` 出该脸转写。
-- 默认**只转目标脸**（省算力）；转所有活跃脸为可选（见 §8）。
-
----
-
-# 第 3 部分 · 时间对齐与流式
-- **主时钟 80ms / 12.5Hz**：几何(≤30fps)池化到 12.5Hz；唇(25Hz)重采样到 12.5Hz；对齐骨干帧。VideoFDB：视觉 ≤12.5Hz 最优。
-- **因果 + delay-token 前视**：沿用 X2-Turn `num_delay_tokens`（默认 6=480ms）做延迟-精度权衡；AV-HuBERT ~2 帧前视落在预算内。
-- **逐帧读出索引**：沿用 `prediction_index = prefix_length + frame_index − 1`（next-token 偏移，`inference.py:165`）；错一帧=全局 80ms 偏移，须单测（脉冲响应）。
-
----
-
-# 第 4 部分 · 参数预算
-
-| 模块 | 参数 | 训练 |
+| | 现有模型（X2-Turn / SoulX） | 我们 |
 |---|---|---|
-| Voxtral 骨干 | 4B | 热启动；S2 开 **LoRA r=32 (~15–25M)** |
-| 几何 MLP | ~0.1M | 训 |
-| 预训练唇前端（AV-HuBERT 视觉塔） | ~20–30M | **冻结**（S2 可轻调） |
-| face-query 读出块（共享） | 数 M | 训 |
-| E2 唇注入 adapter | 小（LoRA 式） | 训 |
-| per-face 头 | ~0 | 训 |
+| 输入 | 单人音频流（chunk） | **多人混合音频 + 单目 RGB** |
+| 隐含假设 | 只有一个说话人 | 画面里有多人、可能同时说 |
+| 能力 | ASR 转写 + 完整性 | **对每个人**：在不在说 · ASR · 完整性 |
 
-→ **可训参数 ~ 数十 M**；与 §0.4（≥30K 事件 ↔ LoRA r=32）耦合仍成立。H20 单卡富余。
+**多出来的三个功能**（都由 RGB 里"谁的嘴在动"驱动）：
+1. **视频归属**——把声音绑定到画面里正在说话的那个人（现有模型无"谁"的概念）。
+2. **重叠鲁棒的 per-speaker ASR**——同时说话时靠各自唇动分给对的人分别转写（现有把混音转成一团糊）。
+3. **per-speaker 完整性**——分别判每个人说完没（现有的完整性在混音上没有意义）。
 
 ---
 
-# 第 5 部分 · 训练
+# 第 2 部分 · 架构（到 forward 为止）
 
-## 5.1 两阶段
-- **S1**：冻骨干，训 视觉前端 + face-query + per-face 头 → 验证 L0/L1 可读、ASR 不坏。
-- **S2**：骨干开 LoRA + 挂 E2 唇注入 → **一次前向联合训练**。
-
-## 5.2 损失
 ```
-loss = asr_loss(目标脸)                       # 热启动 ASR，轻权保能力
-     + Σ_k [ CE(speak_k) + CE(addressee_k) + CE(complete_k) ]
+  多人混合音频 ─►[音频编码器(热启动)]─►[音频-LLM 骨干(热启动, 80ms/帧, 因果, LoRA)]─► hidden H[t]
+                                                                                        │ K,V
+  单目 RGB 视频 ─►[视觉编码器: 整帧RGB→内部人脸检测→每人 visual tokens]── 每人 token 作 Q ─┤
+                                                                                        ▼
+                                              ┌ per-face cross-attn 读出 (每人 Q attend H[t]) ┐
+                                              │  变长 K · 每人独立 · 把混音里属于他的部分拎出来 │
+                                              └───────────────────────┬───────────────────────┘
+                                                                      ▼
+                                     forward 输出 = 每人一组 logits（对 H[t] 的读出）  ← 模型到此为止
 ```
-- **代价非对称**：`incomplete→误判 complete`（=抢话打断）罚重于反向（=多等）——进 loss，不只调阈值。
-- **视觉 dropout**（p≈0.3 整段置零 `visual_valid`）→ 把降级从"结构成立"升级为"统计成立"。
 
-## 5.3 必测单测
-- **恒等性**：`visual_valid` 全零 → 逐比特等于 −视觉臂（纯音频骨干）。
-- **帧对齐脉冲响应**：只在第 k 帧非零的视觉输入 → 输出变化恰在预期帧。
-- **零初始化**：E1/E2 末层零初始化 → step 0 输出等于热启动骨干。
-
----
-
-# 第 6 部分 · 降级保证与模态分工
-- **降级保证**：视觉失效（无脸/遮挡/暗光）→ face-query 无有效 Q → 退化为纯音频骨干行为（恒等性单测保证）。
-- **重叠说话的诚实边界**：混合音频的 `H` 在重叠时退化（噪声 gate 0.47）。E1 的视觉条件 attention 是"路由/归属"机制，**能否把声学上被叠掉的完整性捞回来是经验问题** → 输出 `overlap/uncertain`，并由 **恢复实验**（phase2.md §2.2：AMI/AVCocktail 单人 vs 重叠分档）量化。捞不回则重叠段走 uncertain，或升级视觉引导分离（备选）。
+**四块**：
+1. **音频编码器 + 音频-LLM 骨干**（热启动 X2-Turn/Voxtral）→ 逐帧 `H[t]`，已编码语言内容（供 ASR 与完整性；探针 A 证明完整性信息在 hidden 里）。
+2. **视觉编码器**：吃**整帧 RGB**，内部定位人脸 → 每人一组 visual token。（输入就是 RGB，不是外部喂的 crop/几何。）
+3. **per-face cross-attn 读出**：每人 visual token 作 query 去 attend `H[t]`（视觉"去 attend 音频的哪一段"= 归属）。变长 K、每人独立、共享权重。
+4. **forward 输出 = 每人一组 logits**。模型 forward **到此为止**；如何把 logits 变成"在说?/转写/完整性"见 §4，且**我们的具体输出形态尚未定**（§5）。
 
 ---
 
-# 第 7 部分 · 与竞品的结构性差异
-- **vs MuVAP**：它为套 VAP 把 N 人塌成"当前vs下一 floor-holder"2 态、只判行为；我们 **face-query 变长 K、真 per-face、判语义完整性 + addressee**。
-- **vs AV-Dialog**：它单目标说话人 + 行为事件 token（`<SOT>/<SOB>`）；我们**多人 per-face + 语义完整性判决**。
-- **vs MM-VAP/AVCocktail**：它们 VAP 未来语音活动/无完整性/无 ASD 任务；我们把 **addressee × active × completeness** 合成 per-face 联合判决。
+# 第 3 部分 · 参考骨干：X2-Turn / SoulX 的 forward 输出
+
+两个单流音频-LLM 是我们的直接参照（详图见 HTML）：
+
+- **X2-Turn**（`VoxtralMTP.forward`）：**双头**，forward 返回两个整词表 logits：
+  `logits` = `lm_head(H)` [B,T,131072]（ASR）；`vad_logits` = `vad_lm_head(H)` [B,T,131072]，
+  **仅 id 35–40** 有意义（idle/noidle/speaking/turn_end/backchannel/uncertain）。`vad_lm_head` 是 `lm_head` 的拷贝。
+- **SoulX-Duplug**（`State_Prediction_Model.forward`）：**单头**，forward 返回 `logits` [B,T,V_llm]；
+  complete/incomplete 是**词表里的槽位**（生成式），混在同一 token 流里。
+
+**共同点**：forward 只吐"逐位置的词表 logits"；都是**单流、无"人"的维度**。
+
+---
+
+# 第 4 部分 · 从 logits 到结果（系统层，另做）
+
+**logit 本身只是"下一个 token 的打分"**。之所以能读出 complete/incomplete：① 完整性信息本就编码在 `H[t]`（探针 A 0.99）；② **训练用标签把某个词表槽位"指派"成该类**，CE loss 逼高对应槽位 → 之后"该槽 logit 高"= "模型认为闭合"。
+
+| 模型 | logits → 转写 | logits → 完整性/话轮 |
+|---|---|---|
+| X2-Turn | 对 `logits` 自回归 generate → 去 PAD(32)/WORD(33)/id35–40 → detokenize | 每帧对 `vad_logits` 的 id 35–40 softmax → 6 类（turn_end/uncertain 承载完整性） |
+| SoulX | 解同一条 token 流 → detokenize | 判决位置读 complete/incomplete 槽位 logits，取大 |
+| **我们（待定）** | 每人 token 流（若做 per-face ASR） | 每人 hidden 读出槽位 —— **判别式 or 生成式，见 §5** |
+
+---
+
+# 第 5 部分 · ★ 待定：我们 forward 的输出形态
+
+**这是当前唯一悬置的架构决策**（其余已定）。两个正交的岔路：
+
+1. **粒度**：
+   - (a) **K 套 per-face**：每张脸各自一套（ASR logits 流 + 状态） —— 最贴"逐人"，但 ASR 成本 ×K；
+   - (b) **单流 ASR + 指派头**：一条 ASR + 一个"这帧属于哪张脸"的指派 —— 省 K 倍 ASR。
+2. **状态读出**：
+   - **判别式**（挂 hidden 上读保留槽位，仿 X2-Turn，不 generate；低延迟、可降级）；
+   - **生成式**（状态当 token，仿 SoulX）。
+
+**暂定倾向（未定稿）**：状态走**判别式**（与我们"可降级/低延迟"一致）；粒度 (a)/(b) 取决于是否必须逐人转写还是逐人只需状态+目标转写。**定稿后回填本节、§2 的 forward 输出框与 HTML 主图终点。**
+
+---
+
+# 第 6 部分 · 训练
+- **S1**：冻骨干，训 视觉编码器 + per-face 读出 + 头 → 验证归属/状态可读、ASR 不坏。
+- **S2**：骨干开 **LoRA r=32**（数据足可全微调）→ 一次前向联合训练。
+- 损失：`asr_loss + Σ_k per-face 状态损失`；`incomplete→误判 complete`（抢话）代价加权。
+- 视觉 dropout（p≈0.3 整段置零）→ 降级从"结构成立"升级为"统计成立"。
+- 必测单测：恒等性（无视觉→逐比特等于纯音频骨干）、帧对齐脉冲响应、零初始化。
+
+---
+
+# 第 7 部分 · 降级与竞品差异
+- **降级**：视觉失效（黑暗/无脸）→ 退化为纯音频骨干行为。
+- **重叠的诚实边界**：两人重度重叠时混音 `H[t]` 退化（噪声 gate 0.47），视觉归属是"路由"机制，能否完全捞回完整性是**经验问题** → 低置信输出 **uncertain**，由恢复实验量化（phase2.md §2.2）。
+- **与竞品**：MuVAP 把 N 人塌成 2 态、只判行为；AV-Dialog 单目标 + 行为事件 token；我们 **变长 K 真 per-face + 语义完整性**。
 
 ---
 
 # 第 8 部分 · 待定口子（TODO）
-1. **唇前端选型**：AV-HuBERT 视觉塔 vs Auto-AVSR/VSR 唇编码器——按可得性/许可 + 因果流式支持定。
-2. **身姿来源**：先做 脸+注视+头姿+bbox；身姿朝向（需 body-pose 估计器，如 MediaPipe Pose）作增强项后加。
-3. **骨干适配**：LoRA vs 全微调——等数据量（自建+AVCocktail）定；先按 LoRA 设接口。
-4. **ASR 转写范围**：默认只转目标脸；转所有活跃脸为可选。
-5. **脸间交互**：默认独立读出；inter-face attention 作消融。
-6. **重叠段策略**：uncertain 起步；视觉引导分离作条件升级（依恢复实验结果）。
+1. **★ forward 输出形态**（§5）——当前唯一悬置的架构决策。
+2. **视觉编码器选型**：整帧 RGB 编码器具体用什么（含内部人脸检测/跟踪的选型、是否复用预训练视觉/唇塔）。
+3. **骨干适配**：LoRA vs 全微调——等数据量（自建 + AVCocktail）定。
+4. **重叠段策略**：uncertain 起步；视觉引导分离作条件升级（依恢复实验）。
+5. **"该回应谁"**：最简版交下游简单策略；addressee（跟不跟我说）作后续扩展（可加为第 4 个逐人输出）。
 
 ---
 
 # 附录 · 复用的代码锚点
 （前缀 `X2-Turn/voxtral-realtime/src/voxtral_realtime/transformers/`，只读；详见 [`../docs/code-anchors.md`](../docs/code-anchors.md)）
-- `modeling.py:37-188` `VoxtralMTP`：共享骨干 + 双头范式（我们推广为多 per-face 头）。
-- `modeling.py:60-69`：`vad_lm_head` 复制 `lm_head` 的手法（判别头 warm-start 参考）。
-- `inference.py:86` `_predict_turn`：对保留 id 做 softmax 的判别读出（我们的 per-face 头照此形态）。
-- `inference.py:157-168`：一次前向读逐帧 logits 的循环（per-face 读出挂在此形态）。
+- `modeling.py:37-188` `VoxtralMTP`：共享骨干 + 双头范式（推广为 per-face 多头）。
+- `modeling.py:60-69`：`vad_lm_head` 复制 `lm_head` 的手法。
+- `inference.py:86` `_predict_turn`：对保留 id softmax 的判别读出。
+- `inference.py:157-168`：一次前向读逐帧 logits 的循环。
 - `inference.py:165`：`prediction_index = prefix_length + frame_index − 1` 帧对齐偏移。
 - `modeling.py:125-145` `train_vad_head_only`：S1"冻骨干只训新头"的现成模式。
+- SoulX `model/model.py:17/50/57/145-166`：Projector / 80ms token / 冻结前端 / 融合。
