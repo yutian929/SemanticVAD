@@ -1,167 +1,261 @@
-# AV-SemanticVAD 架构设计（v5 · 多人逐人 · 最简版）
+# 模型架构 v6 —— forward 契约（输入 · 中间流程 · 输出）
 
-> # ✅ 现行权威架构（2026-09-18）
-> **输入 = 多人混合音频 + 单目 RGB 视频；对画面内每个人，逐 chunk 判「在不在说 · 说了什么(ASR) · 说完没(完整性)」。**
-> 目标会议 **CVPR 2027**。骨干走 **Route A（热启动 Voxtral/X2-Turn，非从零训）**。
+> **本文件 = 模型契约的唯一权威。** 对外定位（new setting / 三点贡献 / 竞品口径）以
+> [`cvpr-framing.md`](cvpr-framing.md) 为准，本文件不重复、也不得与之冲突。
+> 旧的 v4/v5 架构文档、旧实施计划、旧 benchmark 提案已于 2026-09-21 **删除**（可从 git 历史取回）。
 >
-> - 总览图（可交互，含 X2-Turn/SoulX 参考图）：[`architecture-diagram.html`](architecture-diagram.html)
-> - 方向转向与竞品调研：[`implementation-execution/phase2.md`](implementation-execution/phase2.md)
-> - 三点贡献与竞品定位：[`implementation-plan.md`](implementation-plan.md) §0.1 / §0.1.1 / §5.2.3
-> - 旧 v4（冻结单流，已否决端到端）已归档：[`architecture-legacy-v4.md`](architecture-legacy-v4.md)
+> **骨干已定** ✅ = **X2-Turn（Voxtral 流式版）**，Route A 热启动（cvpr-framing §8）。
 >
-> **⚠️ 尚未定：模型 forward 的输出形态**（见 §5）。本文其余部分已定；输出形态定稿后回填 §5 与图。
+> 标记：✅ 已定 ｜ 💡 建议待拍板 ｜ ⏳ 待实验定 ｜ ⚠️ 风险
 >
-> **相对旧 v4 的变化**：单流→**多人逐人（per-face）**；纯音频完整性→**视觉做归属、音频做内容/完整性**；
-> 旁挂一路视觉→**端到端联合**。**本版相对早期草案的简化**：输入只留**多人混合音频 + 单目 RGB**；
-> 视觉只用**一个 RGB 编码器**（删去几何/唇双分支、addressee、身份 enroll、DoA、body-pose）；先做最简。
+> **最后更新**：2026-09-21
 
 ---
 
-## 目录
-- [第 0 部分 · 核心命题与任务定义](#第-0-部分--核心命题与任务定义)
-- [第 1 部分 · 相较现有模型多了什么](#第-1-部分--相较现有模型多了什么)
-- [第 2 部分 · 架构（到 forward 为止）](#第-2-部分--架构到-forward-为止)
-- [第 3 部分 · 参考骨干：X2-Turn / SoulX 的 forward 输出](#第-3-部分--参考骨干x2-turn--soulx-的-forward-输出)
-- [第 4 部分 · 从 logits 到结果（系统层，另做）](#第-4-部分--从-logits-到结果系统层另做)
-- [第 5 部分 · ★ 待定：我们 forward 的输出形态](#第-5-部分--待定我们-forward-的输出形态)
-- [第 6 部分 · 训练](#第-6-部分--训练)
-- [第 7 部分 · 降级与竞品差异](#第-7-部分--降级与竞品差异)
-- [第 8 部分 · 待定口子（TODO）](#第-8-部分--待定口子todo)
-- [附录 · 复用的代码锚点](#附录--复用的代码锚点)
+## 0. 一页纸总览
+
+```
+                        ┌─── 前置冻结模块（不参与梯度）───┐
+  单目 RGB (多人同框) ──►│  人脸检测 + 跟踪 → K_t 条轨迹   │──► 每脸: 脸/嘴 crop + 头姿/注视
+                        └──────────────────────────────┘
+                                    │
+                                    ▼  每脸每 80ms 一组 visual token（投影到 3072）
+                          ┌──────────────────────┐
+                          │  视觉塔（共享权重）   │
+                          └──────────┬───────────┘
+                                     │ 零初始化门控 cross-attn，逐脸注入
+  多人混合音频 16kHz ──►[Whisper enc]──►[adapter 4×]──►┌──────────────────────────┐
+                                    12.5Hz / 80ms      │  Voxtral LLM 26 层 d=3072 │
+                                    (热启动·因果)       │  batch 维 = K_t 张脸      │
+                                                       └────────────┬─────────────┘
+                                                                    ▼  H_k[t]  每脸独立 hidden
+                                           ┌────────────────────────────────────────┐
+                                           │ forward 只吐 logits（每脸 × 每帧 × 3 组）│
+                                           │  asr_logits   [B,K,T,131072]           │
+                                           │  state_logits [B,K,T,3]                │
+                                           │  addr_logits  [B,K,T,2]                │
+                                           └────────────────────────────────────────┘
+                                                        ← 模型到此为止；解码属系统层（§5）
+```
 
 ---
 
-# 第 0 部分 · 核心命题与任务定义
+## 1. 输入契约 ✅
 
-## 0.1 核心命题（模态分工，探针实证）
+### 1.1 音频
 
-| 证据 | 结论 |
+| 项 | 值 | 依据 |
+|---|---|---|
+| 形态 | **多人混合**单通道波形，16 kHz | cvpr-framing §1（不用麦阵 / DoA） |
+| 前端 | Whisper-large-v3 编码器，`num_mel_bins=128`，`hidden=1280`，32 层 | `config.json: audio_config` |
+| 降采样 | adapter `downsample_factor=4` → LLM token 流 | `config.json: downsample_factor` |
+| **帧率** | **12.5 Hz = 80 ms / token** | `audio_length_per_tok=8` × `hop_length=160` ÷ 16000 = 80 ms（`inference.py:118-119` 就是这样算的） |
+| LLM 维度 | `hidden_size=3072`，26 层，`vocab=131072` | `config.json: text_config` |
+| **固有前瞻延迟** | `default_num_delay_tokens=6` → **480 ms** | `inference.py:122`；⚠️ 见 §6.2，视觉必须对齐同一延迟约定 |
+
+### 1.2 视频
+
+| 项 | 值 |
 |---|---|
-| 探针 A（干净单人） | 音频完整性 AUC **0.99** → 音频判"说完没"够强 |
-| 噪声 gate（竞争说话人） | 剔时长后 0.77→**0.47** → 混合/重叠下音频**塌** |
-| 探针 B（视觉→完整性） | **0.42≈随机** → 视觉**不能直接读完整性** |
-| 探针 B（视觉→说话人身份） | acc **0.649** → 视觉**能做归属** |
+| 形态 | **单目 RGB**，多人同框；假设人一定在画面内 |
+| 前置模块 | **人脸检测 + 跟踪**（冻结、不训）→ 第 t 帧给出 `K_t` 条稳定轨迹 |
+| 每条轨迹产出 | ① 脸/嘴 ROI crop；② **头姿 + 注视**低维向量（addressee 轴必需，探针 B 用过 FaceLandmarker 的 3 维头姿） |
+| 时间对齐 | 视频帧率重采样到 **12.5 Hz**（25 fps → 每 80 ms 格取末帧；50 fps → 池化） |
+| `K_t` | **变长**，允许进出画面；`K_t = 0` 时模型退化为纯音频骨干（§6.3） |
 
-> **架构第一原则**：**视觉做归属（谁在说 / 声音归到哪张脸），音频做内容与完整性（说了什么 / 说完没）。**
-> 视觉把"多人混合"还原成"可归属到某张脸的流"；完整性判断仍由强音频骨干承担。
-
-## 0.2 任务定义（输入/能力）
-- **输入**（流式、因果、80ms）：① 多人**混合音频**（16kHz）；② 单目 **RGB 视频**（多人在画面内）。
-  **假设人一定在画面内**（不做画面外；不用麦阵/DoA/朝向要求）。
-- **能力（系统交付）**：对**画面内每个人**逐 chunk 给出 `{在不在说 · ASR 转写 · complete/incomplete}`。
-- **注意**：这是**系统层交付**；模型 forward 本身只吐 logits（见 §2/§4/§5）。
+**为什么 crop 而不是整帧**：读出是 per-face 的，视觉塔必须拿到"这张脸"的像素。
+v5 曾写"整帧 RGB 编码器内部检测"，此处**改为前置显式检测跟踪** —— 理由：
+(a) omni 类整帧 ViT 给不了 per-face token（cvpr-framing §8.3 第 5 条）；
+(b) 检测跟踪做成冻结前置模块可插拔、可单独评测、不吃训练预算。
 
 ---
 
-# 第 1 部分 · 相较现有模型多了什么
+## 2. 中间流程
 
-| | 现有模型（X2-Turn / SoulX） | 我们 |
-|---|---|---|
-| 输入 | 单人音频流（chunk） | **多人混合音频 + 单目 RGB** |
-| 隐含假设 | 只有一个说话人 | 画面里有多人、可能同时说 |
-| 能力 | ASR 转写 + 完整性 | **对每个人**：在不在说 · ASR · 完整性 |
-
-**多出来的三个功能**（都由 RGB 里"谁的嘴在动"驱动）：
-1. **视频归属**——把声音绑定到画面里正在说话的那个人（现有模型无"谁"的概念）。
-2. **重叠鲁棒的 per-speaker ASR**——同时说话时靠各自唇动分给对的人分别转写（现有把混音转成一团糊）。
-3. **per-speaker 完整性**——分别判每个人说完没（现有的完整性在混音上没有意义）。
-
----
-
-# 第 2 部分 · 架构（到 forward 为止）
+### 2.1 视觉塔 💡（选型待拍板，接口已定）
 
 ```
-  多人混合音频 ─►[音频编码器(热启动)]─►[音频-LLM 骨干(热启动, 80ms/帧, 因果, LoRA)]─► hidden H[t]
-                                                                                        │ K,V
-  单目 RGB 视频 ─►[视觉编码器: 整帧RGB→内部人脸检测→每人 visual tokens]── 每人 token 作 Q ─┤
-                                                                                        ▼
-                                              ┌ per-face cross-attn 读出 (每人 Q attend H[t]) ┐
-                                              │  变长 K · 每人独立 · 把混音里属于他的部分拎出来 │
-                                              └───────────────────────┬───────────────────────┘
-                                                                      ▼
-                                     forward 输出 = 每人一组 logits（对 H[t] 的读出）  ← 模型到此为止
+crop_k[t]  ─►[视觉编码器(预训练唇动/脸动塔)]─► e_k[t] ∈ R^d_v
+pose_k[t]  ─►[小 MLP]──────────────────────► g_k[t] ∈ R^d_g
+                       concat → Linear(d_v+d_g → 3072) → v_k[t]   （每脸每 80ms 一个 token）
 ```
 
-**四块**：
-1. **音频编码器 + 音频-LLM 骨干**（热启动 X2-Turn/Voxtral）→ 逐帧 `H[t]`，已编码语言内容（供 ASR 与完整性；探针 A 证明完整性信息在 hidden 里）。
-2. **视觉编码器**：吃**整帧 RGB**，内部定位人脸 → 每人一组 visual token。（输入就是 RGB，不是外部喂的 crop/几何。）
-3. **per-face cross-attn 读出**：每人 visual token 作 query 去 attend `H[t]`（视觉"去 attend 音频的哪一段"= 归属）。变长 K、每人独立、共享权重。
-4. **forward 输出 = 每人一组 logits**。模型 forward **到此为止**；如何把 logits 变成"在说?/转写/完整性"见 §4，且**我们的具体输出形态尚未定**（§5）。
+- 编码器候选：**AV-HuBERT 视觉前端**（唇动，96×96 ROI，自监督预训练）vs **Light-ASD / TalkNet 骨干**（ASD 任务预训练，天然擅长"谁在说"）。💡 **建议 AV-HuBERT 前端**——它输出的是序列表征而非二分类 logit，更适合当 cross-attn 的 query 源。
+- 注视/头姿走**独立支路**且不能被唇动塔吞掉：addressee 轴只靠它（cvpr-framing §3.2）。
+- 每脸每帧 **1 个 token** 起步；若容量不足再升到 n 个（n 是超参，不改契约）。
 
----
+### 2.2 per-face 条件化 —— ★ 本架构的核心机制 💡
 
-# 第 3 部分 · 参考骨干：X2-Turn / SoulX 的 forward 输出
+**面孔 k 的 visual token 序列，通过零初始化门控 cross-attention 注入 LLM。**
 
-两个单流音频-LLM 是我们的直接参照（详图见 HTML）：
+```
+LLM 第 ℓ 层（每 N 层插一个，N≈4）:
+    h ← h + tanh(α_ℓ) · CrossAttn(Q = h, K = V = v_k[≤t])      α_ℓ 初始化为 0
+```
 
-- **X2-Turn**（`VoxtralMTP.forward`）：**双头**，forward 返回两个整词表 logits：
-  `logits` = `lm_head(H)` [B,T,131072]（ASR）；`vad_logits` = `vad_lm_head(H)` [B,T,131072]，
-  **仅 id 35–40** 有意义（idle/noidle/speaking/turn_end/backchannel/uncertain）。`vad_lm_head` 是 `lm_head` 的拷贝。
-- **SoulX-Duplug**（`State_Prediction_Model.forward`）：**单头**，forward 返回 `logits` [B,T,V_llm]；
-  complete/incomplete 是**词表里的槽位**（生成式），混在同一 token 流里。
+- **因果**：帧 t 只看 `v_k[≤t]`（与音频侧同一延迟约定，§6.2）。
+- **零初始化**：`α=0` 时整个模型**逐比特等于纯 X2-Turn** → 这是 §6.1 必测的恒等性单测，也是"视觉失效可降级"的结构保证。
+- **batch 维 = K_t 张脸**：同一段混合音频的 `input_features` 在 K 条流上完全相同，差别只在
+  (a) 注入的 `v_k`，(b) 各自的 text 流。一次 batched forward 出 K 套 hidden `H_k[t]`。
+- **新增参数**只有：视觉塔 + 门控 cross-attn + 三个头；骨干走 LoRA。
 
-**共同点**：forward 只吐"逐位置的词表 logits"；都是**单流、无"人"的维度**。
+> **⚠️ 新颖性口径（不可犯）**：这个机制 = **AV-TSE 的表征空间版本**，机制**不新**
+> （CueNet / Plug-and-Steer / USEF-TSE，cvpr-framing §7）。
+> 论文里**绝不能**写"首个视觉引导 per-face 提取/路由"；卖点钉在**输出是 per-face 语义状态而非波形**。
 
----
+### 2.3 ★ 唯一需要你拍板的岔路：A 还是 B
 
-# 第 4 部分 · 从 logits 到结果（系统层，另做）
-
-**logit 本身只是"下一个 token 的打分"**。之所以能读出 complete/incomplete：① 完整性信息本就编码在 `H[t]`（探针 A 0.99）；② **训练用标签把某个词表槽位"指派"成该类**，CE loss 逼高对应槽位 → 之后"该槽 logit 高"= "模型认为闭合"。
-
-| 模型 | logits → 转写 | logits → 完整性/话轮 |
+|  | **A · 共享单次前向 + 读出**（v5 原案） | **B · per-face 条件化流**（本文件建议） |
 |---|---|---|
-| X2-Turn | 对 `logits` 自回归 generate → 去 PAD(32)/WORD(33)/id35–40 → detokenize | 每帧对 `vad_logits` 的 id 35–40 softmax → 6 类（turn_end/uncertain 承载完整性） |
-| SoulX | 解同一条 token 流 → detokenize | 判决位置读 complete/incomplete 槽位 logits，取大 |
-| **我们（待定）** | 每人 token 流（若做 per-face ASR） | 每人 hidden 读出槽位 —— **判别式 or 生成式，见 §5** |
+| 骨干前向次数 | **1×** | **K×**（batch 维，一次 batched forward） |
+| 视觉进入位置 | 骨干**之后**，cross-attn 读出 `H[t]` | 骨干**之内**，逐层门控注入 |
+| per-face ASR | ❌ 只有一条混合流的 ASR | ✅ 每脸一条 text 流 |
+| per-face 完整性从哪读 | **混合 hidden** —— 正是噪声 gate 塌到 **0.47** 的那个东西 ⚠️ | 已被视觉条件化的 `H_k`，信息未被混合前向抹平 |
+| 成本（K=4, 4B, 12.5Hz） | 1 份 | 4 份（batched，2×H20 可承） |
+
+**💡 建议 = B 为主模型，A 作为消融臂。** 三条理由：
+
+1. **A 给不了 per-face ASR**，而"重叠鲁棒的 per-speaker 转写"是 new setting 承诺的三大能力之一。
+2. **A 的完整性读出恰好走在探针警告的那条路上**：混合前向的 `H[t]` 若已退化，cross-attn 只能**路由**、
+   不能**无中生有**（phase2.md §2.2 的原话）。B 把视觉放进骨干**之前/之内**，让条件化影响表征本身。
+3. **A 是 B 的严格子集**（把门控关掉、改成事后读出即得 A）→ 做 B **白送** A 的消融对比；
+   反过来做 A 则永远补不出 B。这条对 C3 的"同构消融"要求直接有利。
+
+**⏳ 由实验最终裁定**：重叠段恢复实验（cvpr-framing §5 backlog 7）应**同时**跑 A 和 B 两臂 ——
+它既是 C2 强弱的判据，也是这条岔路的判据。若 B 相对 A 在重叠档没有显著增益，则 B 的 K× 成本不值，退回 A。
 
 ---
 
-# 第 5 部分 · ★ 待定：我们 forward 的输出形态
+## 3. 输出契约 ✅（forward 只吐 logits）
 
-**这是当前唯一悬置的架构决策**（其余已定）。两个正交的岔路：
+对每张脸 `k ∈ [1..K_t]`、每个 80 ms 帧 `t`：
 
-1. **粒度**：
-   - (a) **K 套 per-face**：每张脸各自一套（ASR logits 流 + 状态） —— 最贴"逐人"，但 ASR 成本 ×K；
-   - (b) **单流 ASR + 指派头**：一条 ASR + 一个"这帧属于哪张脸"的指派 —— 省 K 倍 ASR。
-2. **状态读出**：
-   - **判别式**（挂 hidden 上读保留槽位，仿 X2-Turn，不 generate；低延迟、可降级）；
-   - **生成式**（状态当 token，仿 SoulX）。
+| 输出 | 形状 | 实现 | 热启动 |
+|---|---|---|---|
+| `asr_logits` | `[B, K, T, 131072]` | 复用 `base_model.lm_head` | ✅ 直接继承 X2-Turn |
+| `state_logits` | `[B, K, T, 3]` | **新** `Linear(3072, 3, bias=False)` | ✅ 从 `vad_lm_head` 的第 **35 / 37 / 38** 行拷贝（见下） |
+| `addr_logits` | `[B, K, T, 2]` | **新** `Linear(3072, 2, bias=False)` | ❌ 随机初始化（无对应先验） |
 
-**暂定倾向（未定稿）**：状态走**判别式**（与我们"可降级/低延迟"一致）；粒度 (a)/(b) 取决于是否必须逐人转写还是逐人只需状态+目标转写。**定稿后回填本节、§2 的 forward 输出框与 HTML 主图终点。**
+### 3.1 状态三态 ✅
+
+`{0: 静默 · 1: 说话-incomplete · 2: 说话-complete}` —— active 与 completeness 天然耦合，单头即可。
+
+**热启动技巧**：X2-Turn 的 `vad_lm_head` 是 `lm_head` 的整词表拷贝，只有 id 35–40 有意义
+（`modeling.py:15-23`：`idle/noidle/speaking/turn_end/backchannel/uncertain`）。
+我们的三态与其中三类语义对齐 → 用对应行初始化：
+
+```
+state_head.weight[0] ← vad_lm_head.weight[35]   # 静默         ← idle
+state_head.weight[1] ← vad_lm_head.weight[37]   # 说话-incomplete ← speaking
+state_head.weight[2] ← vad_lm_head.weight[38]   # 说话-complete   ← turn_end
+```
+
+→ day-0 就不是随机头。**探针 A 的 0.99 说明完整性在 hidden 里线性可读**，这个三态小头足够。
+
+### 3.2 判别式，不走生成式 ✅（cvpr-framing §3.2 backlog 1 → 本文件拍板）
+
+状态**不**占词表槽位、**不**进 text 流。依据：探针 A 线性可读 → 判别式够；低延迟、不 generate、
+K 个头天然并行、评测直接出 AUC；视觉失效时可独立降级。
+（X2-Turn 自己走的是"整词表 + 保留 id"的路子，那是为了 checkpoint 兼容标准 LM 工具链 ——
+我们不再守冻结范式，没有这个约束。）
+
+### 3.3 addressee ✅（提级进核心）
+
+per-face 二分类 `{对系统说 · 不对系统说}`，与状态正交。
+**⚠️ 与 v5 的冲突点**：v5 明确"删去 addressee"，cvpr-framing §1/§3.2 今天把它提级进核心 setting。
+**本文件以 cvpr-framing 为准：addressee 是第 4 个 per-face 输出。**
+数据代价（需第一人称/机器人视角语料，AMI 给不了）见 cvpr-framing §2 C1 的 ⚠️。
+
+### 3.4 系统层解码（不属模型 forward）
+
+`{state_logits 三态 softmax}` × `{addr_logits}` × `{asr_logits 自回归解出的文本}`
+→ "该不该现在回应他"。阈值、迟滞、uncertain 兜底都在系统层，模型不管。
 
 ---
 
-# 第 6 部分 · 训练
-- **S1**：冻骨干，训 视觉编码器 + per-face 读出 + 头 → 验证归属/状态可读、ASR 不坏。
-- **S2**：骨干开 **LoRA r=32**（数据足可全微调）→ 一次前向联合训练。
-- 损失：`asr_loss + Σ_k per-face 状态损失`；`incomplete→误判 complete`（抢话）代价加权。
-- 视觉 dropout（p≈0.3 整段置零）→ 降级从"结构成立"升级为"统计成立"。
-- 必测单测：恒等性（无视觉→逐比特等于纯音频骨干）、帧对齐脉冲响应、零初始化。
+## 4. 训练契约
+
+### 4.1 阶段
+- **S1**：冻骨干（含音频编码器），只训 **视觉塔 + 门控 cross-attn + 三个头**。门控从 0 长起来。
+  验收：归属/状态可读、ASR 不坏（恒等性单测仍过）。
+- **S2**：骨干开 **LoRA r=32**（数据量足则全微调），一次前向联合训。
+
+### 4.2 损失
+```
+L = L_asr + λ_s · Σ_k L_state(k) + λ_a · Σ_k L_addr(k)
+```
+- `L_state` 类加权：**incomplete 被误判成 complete（= 抢话）代价最高**。
+- 视觉 dropout `p≈0.3`（整段置零）→ 把"视觉失效可降级"从结构保证升级成统计保证。
+
+### 4.3 标签形态（数据集接口，C1 必须产出这个）
+每段视频、每 80 ms 帧、每条人脸轨迹：
+`{track_id, state ∈ {0,1,2}, addressee ∈ {0,1}, text（该脸该帧的转写 token）}`。
+⏳ 数据方案（自建 vs 扩展 AVCocktail）见 cvpr-framing §5 backlog 5。
 
 ---
 
-# 第 7 部分 · 降级与竞品差异
-- **降级**：视觉失效（黑暗/无脸）→ 退化为纯音频骨干行为。
-- **重叠的诚实边界**：两人重度重叠时混音 `H[t]` 退化（噪声 gate 0.47），视觉归属是"路由"机制，能否完全捞回完整性是**经验问题** → 低置信输出 **uncertain**，由恢复实验量化（phase2.md §2.2）。
-- **与竞品**：MuVAP 把 N 人塌成 2 态、只判行为；AV-Dialog 单目标 + 行为事件 token；我们 **变长 K 真 per-face + 语义完整性**。
+## 5. 必测单测 ✅
+
+1. **恒等性**：所有门控 `α=0` 且无视觉 → 输出与纯 X2-Turn **逐比特相同**。
+2. **帧对齐脉冲响应**：在第 n 帧注入脉冲，确认响应出现在第 n 帧而非 n±1。
+   ⚠️ X2-Turn 的读出偏移是 `prediction_index = prefix_length + frame_index - 1`（`inference.py:165`，next-token 语义），写错全局错位 80 ms。
+3. **零初始化**：新头/新门控在 step 0 的梯度与输出符合预期。
+4. **变长 K**：`K=0 / 1 / 4 / 8` 与人脸中途进出，形状与 mask 正确。
 
 ---
 
-# 第 8 部分 · 待定口子（TODO）
-1. **★ forward 输出形态**（§5）——当前唯一悬置的架构决策。
-2. **视觉编码器选型**：整帧 RGB 编码器具体用什么（含内部人脸检测/跟踪的选型、是否复用预训练视觉/唇塔）。
-3. **骨干适配**：LoRA vs 全微调——等数据量（自建 + AVCocktail）定。
-4. **重叠段策略**：uncertain 起步；视觉引导分离作条件升级（依恢复实验）。
-5. **"该回应谁"**：最简版交下游简单策略；addressee（跟不跟我说）作后续扩展（可加为第 4 个逐人输出）。
+## 6. 已知风险与边界
+
+### 6.1 重叠段 ⏳
+两人重度重叠时混音表征退化（噪声 gate 0.47）。B 路线**假设**条件化能在表征层把目标捞回，
+这是**经验问题**，由恢复实验量化。低置信 → 系统层输出 uncertain。
+
+### 6.2 ⚠️ 延迟对齐（最容易写错的地方）
+X2-Turn 默认 `num_delay_tokens=6` = **480 ms** 前瞻：text 流位置 `p` 对应的音频是 `p-6` 帧。
+视觉 token 注入时必须**换算到同一时间基**，否则视听错位 480 ms 且不会报错、只会静默掉点。
+实现时以 `inference.py:133-135` 的 `prefix_length / frame_count` 为准。
+
+### 6.3 降级
+`K_t = 0`、黑暗、无脸、跟踪丢失 → 该脸的 `v_k` 置零 → 门控路径无贡献 → 退化为纯音频骨干行为。
+
+### 6.4 成本
+B 路线是 K× 骨干计算。K=4、4B、batched decode @12.5 Hz 在 2×H20 上可行；
+`K≥8` 需要评估是否降级为"状态头跑全部 K 脸（共享前向），ASR 流只对 active 脸起"的混合策略
+（= cvpr-framing §3.2 的"读出/ASR 解耦"，作为**部署期优化**而非论文主模型）。
 
 ---
 
-# 附录 · 复用的代码锚点
-（前缀 `X2-Turn/voxtral-realtime/src/voxtral_realtime/transformers/`，只读；详见 [`../docs/code-anchors.md`](../docs/code-anchors.md)）
-- `modeling.py:37-188` `VoxtralMTP`：共享骨干 + 双头范式（推广为 per-face 多头）。
-- `modeling.py:60-69`：`vad_lm_head` 复制 `lm_head` 的手法。
-- `inference.py:86` `_predict_turn`：对保留 id softmax 的判别读出。
-- `inference.py:157-168`：一次前向读逐帧 logits 的循环。
-- `inference.py:165`：`prediction_index = prefix_length + frame_index − 1` 帧对齐偏移。
-- `modeling.py:125-145` `train_vad_head_only`：S1"冻骨干只训新头"的现成模式。
-- SoulX `model/model.py:17/50/57/145-166`：Projector / 80ms token / 冻结前端 / 融合。
+## 7. 相对 v5 的变化清单
+
+| 项 | v5 | v6 | 原因 |
+|---|---|---|---|
+| addressee | 删去 | **第 4 个 per-face 输出** | cvpr-framing §1 提级 |
+| 视觉输入 | 整帧 RGB，编码器内部检测 | **前置冻结检测跟踪 → per-face crop** | 整帧 ViT 给不了 per-face token |
+| 视觉进入位置 | 骨干**之后** cross-attn 读出 | **骨干之内**逐层零初始化门控注入（B）；A 作消融 | A 的完整性读自混合 hidden，撞 0.47 |
+| 状态读出 | 判别式 / 生成式未定 | **判别式**，且从 `vad_lm_head` 行热启动 | 探针 A 线性可读 |
+| 粒度 | K 套 vs 单流未定 | **K 套（batch 维）**，ASR 解耦作部署优化 | per-face ASR 是 setting 承诺的能力 |
+| 骨干 | Voxtral/X2-Turn 未细化 | **X2-Turn-4B-0812**，参数已核 | cvpr-framing §8 |
+
+---
+
+## 8. 仍待决 ⏳
+
+1. **A / B 岔路**的最终裁定 → 重叠段恢复实验（两臂同跑）。
+2. **视觉编码器选型**：AV-HuBERT 前端 vs Light-ASD/TalkNet；检测跟踪器选型。
+3. 每脸每帧 visual token 数 `n`、门控插入间隔 `N`。
+4. LoRA r=32 vs 全微调 —— 等数据量定。
+5. 数据集方案与 addressee 标签定义（cvpr-framing §5 backlog 5 / 9）。
+
+---
+
+## 附录 · 复用的代码锚点
+
+前缀 `X2-Turn/voxtral-realtime/src/voxtral_realtime/transformers/`，只读；详见 [`../docs/code-anchors.md`](../docs/code-anchors.md)。
+
+- `modeling.py:15-23` `TURN_CLASS_IDS/NAMES` —— §3.1 热启动取的就是这里的 35/37/38。
+- `modeling.py:37-188` `VoxtralMTP` —— 共享骨干 + 多头范式，我们推广为 per-face 多头。
+- `modeling.py:60-69` —— `vad_lm_head` 拷贝 `lm_head` 的手法。
+- `modeling.py:125-145` `train_vad_head_only` —— S1"冻骨干只训新头"的现成实现。
+- `inference.py:86` `_predict_turn` —— 判别式读出的写法。
+- `inference.py:118-122` —— 80 ms 帧长与 480 ms 延迟的计算（§1.1 / §6.2）。
+- `inference.py:165` —— `prediction_index = prefix_length + frame_index - 1` 帧对齐偏移。

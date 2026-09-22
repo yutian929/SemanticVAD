@@ -1,6 +1,10 @@
+> ⚠️ **本文件是事实记录，不是计划。** 其中的计划、架构、数据源决策**已作废** ——
+> 对外定位以 [`../cvpr-framing.md`](../cvpr-framing.md) 为准，模型契约以 [`../architecture.md`](../architecture.md) 为准。
+> 保留本文件只为两件事：**探针怎么跑的 / 得到什么数**，以及**文献核查的一手结论**。（2026-09-21 清理）
+
 # Phase 1 执行日志（数据集：AVSC-Corpus）
 
-对应 [`../implementation-plan.md`](../implementation-plan.md) §1（数据来源/许可/标注流水线）。
+（原对应旧计划 §1 数据来源/许可/标注流水线，该计划已删除。）
 本文件记录 Phase 1 实际做了什么、结论、与计划的偏差。上手导航见 [`../README.md`](../README.md)。
 
 > ## 📌 Phase 1 当前结论摘要（TL;DR）
@@ -41,8 +45,8 @@
 
 ### 对计划的订正（已改权威文档）
 
-三处错误已在 `implementation-plan.md`（顶部 changelog + §0.1.1 表 + §1.1 表/段 + §4.5.8）、
-`research/evidence-table.md`、`benchmark-proposal.md`、`phase0.md`、`plan/README.md` 订正：
+三处错误已在当时的各权威文档（现多已删除）、
+`research/evidence-table.md`、`phase0.md` 订正：
 
 1. **MM-F2F 是英文，非中文** —— 影响"中文主训练"假设与 §4.5.8 语言拆分。
 2. **不发布媒体** —— 只发标注+链接+脚本；原 §1.1「用它可绕开人脸合规风险」**不成立**（拿到的是生 YouTube、非去标识；我们同样不能再分发媒体，只能仿其发标注+脚本）。

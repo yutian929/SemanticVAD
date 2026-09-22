@@ -1,8 +1,12 @@
+> ⚠️ **本文件是事实记录，不是计划。** 其中的计划、架构、数据源决策**已作废** ——
+> 对外定位以 [`../cvpr-framing.md`](../cvpr-framing.md) 为准，模型契约以 [`../architecture.md`](../architecture.md) 为准。
+> 保留本文件只为两件事：**探针怎么跑的 / 得到什么数**，以及**文献核查的一手结论**。（2026-09-21 清理）
+
 # Phase 2 执行日志（视觉模态：多人 per-face 语义完整性）
 
-对应 [`../implementation-plan.md`](../implementation-plan.md) Phase 2（模型结构改造）。
+（原对应旧计划 Phase 2 模型结构改造，该计划已删除。）
 本文件记录 Phase 2 的**方向转向（re-scope）**、支撑它的**深度文献调研**、以及待决的架构/数据岔路。
-上手导航见 [`../README.md`](../README.md)。执行记录约定见 [`README.md`](README.md)。
+执行记录约定见 [`README.md`](README.md)。
 
 > ## 📌 Phase 2 当前结论摘要（TL;DR）
 >
@@ -214,7 +218,7 @@ face_k ─►[视觉编码器]─► q_k ─┘                         └► {
 
 ## 2.4 — 架构讨论进度（2026-09-18，暂告段落）
 
-与用户逐步讨论收敛出 **v5 最简架构**，已写入 [`../architecture.md`](../architecture.md) 与 [`../architecture-diagram.html`](../architecture-diagram.html)：
+与用户逐步讨论收敛出 **v5 最简架构**，（v5 已被 [`../architecture.md`](../architecture.md) 的 v6 取代，下列为历史记录）：
 - **端到端、Route A**（热启动 Voxtral/X2-Turn，非从零）；参考 X2-Turn 的端到端做法（共享 hidden 上多判别头）。
 - **输入锁定**：多人**混合音频** + 单目 **RGB**（假设人一定在画面内；不用麦阵/DoA/朝向）。
 - **简化（用户拍板）**：视觉只用**一个 RGB 编码器**（内部人脸检测→每人 token），**删去** 几何/唇双分支、addressee、身份 enroll、DoA、body-pose、4 态、L0 闸。
@@ -237,6 +241,6 @@ face_k ─►[视觉编码器]─► q_k ─┘                         └► {
 - ⏳ **数据集方案**：自建 AV 多人 per-face 双轴（active-speaker × 语义完整性）语料 vs 复用/扩展 AVCocktail
   加双轴标注做评测集。GRASS 证明完整性标注仅存于纯音频/德语/95min → 自建训练集大概率必需。
 - ⏳ **AMI 特写机位可得性**确认（决定 ASD 分辨率）。
-- ⏳ 架构定稿：per-face 三态头 / 多流 / 重叠段策略；并同步 `implementation-plan.md` 的 C1/C2 措辞与 §5.2.3 竞品表
+- ⏳ 架构定稿：per-face 三态头 / 多流 / 重叠段策略；（措辞与竞品表已迁入 `../cvpr-framing.md`）
   （补 MuVAP / MM-VAP / AV-Dialog / AVCocktail / GRASS）。
 - ⏳ 复核开放问题：是否有 2024-2026 ASD 论文已从 ASD 侧输出 per-face "is-speaking + is-done"（本批未独立验证）。

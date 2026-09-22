@@ -1,7 +1,7 @@
 # GPU 服务器部署清单（双卡 H20）
 
 > 目标：在有卡的服务器上把 Phase 0 跑起来。
-> 对应 [`../plan/implementation-plan.md`](../plan/implementation-plan.md) §Phase 0。
+> 环境与部署说明；任务归属见 [`../plan/architecture.md`](../plan/architecture.md)。
 
 ---
 
@@ -186,7 +186,7 @@ git clone https://github.com/Linyx1125/MM-F2F
 
 ## 4. 环境就绪后做什么
 
-**任务清单在 [`../plan/implementation-plan.md`](../plan/implementation-plan.md) §Phase 0**
+**任务清单见 [`../plan/cvpr-framing.md`](../plan/cvpr-framing.md) §5**
 —— 那里是唯一权威，本文件不复制，避免两份清单打勾状态不一致。
 
 Phase 0 一共三组事，按此顺序：

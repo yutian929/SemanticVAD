@@ -135,7 +135,7 @@ CI 运行时、arXiv v3 链接），因此 C2（模型改造）与 Phase 0 探�
 **三个目录一律只读。** 不在其中直接改代码。
 
 理由：
-1. 我们的改造走**包装**而非 fork（见 `AV-SemanticVAD/plan/implementation-plan.md` 附录 C），
+1. 我们的改造走**包装**而非 fork（见 `AV-SemanticVAD/plan/architecture.md`），
    所有新增代码在 `AV-SemanticVAD/avsvad/` 下，通过 `avsvad/upstream.py` 引用上游模块
 2. 保持只读，才能随时用下节的命令**确认我们没有偏离上游**，
    也才能在论文里诚实声明「未修改基座代码」

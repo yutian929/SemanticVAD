@@ -9,7 +9,7 @@
 
 ## 1. X2-Turn（base，上游 `@8992c7c`）
 
-**角色**：本项目的 base 权重来源，**全部冻结**。
+**角色**：本项目的骨干权重来源。⚠️ **不再全部冻结** —— v6 走 S1 冻骨干训新模块 → S2 LoRA r=32（见 [`../plan/architecture.md`](../plan/architecture.md) §4）。
 
 > **行号已在上游 `@8992c7c` 上复验**（2026-09-14）—— `modeling.py` 与 `inference.py`
 > 与上游**逐字节一致**，下表全部锚点仍成立。
@@ -19,9 +19,9 @@
 
 | 内容 | 位置 | 为什么要读 |
 |---|---|---|
-| **`TURN_CLASS_IDS = (35,…,40)` 定义处** | **`…/modeling.py:15`** | 6 类话轮的 id 组。我们在旁边加 `CI_CLASS_IDS=(41,42)`（待 V2 确认空闲） |
+| **`TURN_CLASS_IDS = (35,…,40)` 定义处** | **`…/modeling.py:15`** | 6 类话轮的 id 组。⚠️ v6 **不再占用空闲 id**，改为判别式小头，并从第 35/37/38 行**热启动**（`architecture.md` §3.1） |
 | `TURN_CLASS_NAMES` | `…/modeling.py:16` | 6 类的名字顺序 |
-| **`TURN_CLASS_IDS` 的 softmax 使用处** | **`…/inference.py:86`**（在 `_predict_turn()`，定义于 `:83`） | **只对这 6 个 id 做 softmax。我们的 ci 判决要在此旁边加一路对 (41,42) 的 softmax** |
+| **`TURN_CLASS_IDS` 的 softmax 使用处** | **`…/inference.py:86`**（在 `_predict_turn()`，定义于 `:83`） | **只对这 6 个 id 做 softmax** —— v6 的三态判决改走独立 `Linear(3072,3)` 头，此处只作判别式读出写法的参考 |
 | `_predict_turn()` 的调用点 | `…/inference.py:168` | 逐帧循环内 |
 | `VoxtralMTP` 类与双头 | `…/modeling.py`（共 264 行，全文可读） | 我们要包装的类；`base_model.lm_head` + `self.vad_lm_head` |
 | **冻结开关 `train_vad_head_only`** | **`…/modeling.py:125-145`** | **现成的「骨干 `no_grad` + 只训 vad 头」实现，正是我们 S1 要的模式** |

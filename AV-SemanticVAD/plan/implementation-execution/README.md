@@ -1,8 +1,8 @@
 # 执行记录（implementation-execution）
 
-> **这是计划的执行日志。** 计划「应该做什么」在 [`../implementation-plan.md`](../implementation-plan.md)（唯一权威）；
+> **这是探针与调研的事实记录。** 计划「应该做什么」现归 [`../cvpr-framing.md`](../cvpr-framing.md) 与 [`../architecture.md`](../architecture.md)；
 > 本目录只记录「实际做了什么、得到什么结果、与计划的偏差」，**按项目 phase 分文件**。
-> 上手导航见 [`../README.md`](../README.md)。
+
 
 ## 按 phase 分的执行日志
 
@@ -14,11 +14,11 @@
 | （future）`phase3..5.md` | Phase 3–5 | ⏳ 未开始 | — |
 
 > 今天（2026-09-13-14）的所有工作——环境、探针 A、Gate、噪声 gate——**在权威计划里都属 Phase 0**，
-> 故全部记在 `phase0.md`。它的结论（新 framing）也已同步进 `../implementation-plan.md` 顶部 changelog。
+> 故全部记在 `phase0.md`。
 
 ## 约定
 
 - 每个任务记：**做法 / 命令 / 结果 / 结论 / 与计划的偏差**。
 - 产物落位：脚本 → `AV-SemanticVAD/scripts/`；结果 → `AV-SemanticVAD/results/`；
   测试 → `AV-SemanticVAD/tests/`。**不改三个只读第三方目录**（`X2-Turn/`、`SoulX-Duplug/`、`SoulX-Duplug-training/`）。
-- 待核实项（V1–V13）在计划附录 D，本记录负责把它们逐个标为「已解锁 + 答案」。
+- 旧计划附录 D 的待核实项（V1–V13）随该文件删除；仍有效的未决项见 `../cvpr-framing.md` §5。
