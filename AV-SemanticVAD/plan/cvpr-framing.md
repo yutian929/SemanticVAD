@@ -95,41 +95,26 @@
 
 ---
 
-## 3. 主要模型结构(forward 契约)
+## 3. 主要模型结构(摘要 —— 细节见 architecture.md)
 
-### 3.1 已确定 ✅(architecture.md v5)
-```
-输入(流式/因果/80ms):  多人混合音频 a_t(16kHz)  +  单目 RGB v_t
-预处理:                人脸检测+跟踪 → 当前帧 K_t 条人脸轨迹 {f_1..f_K}
+> ⚠️ **本节只留摘要。** forward 契约的唯一权威是 [`architecture.md`](architecture.md)(现行 **v6.2**)。
+> 原 v5 结构图("共享一次前向 + 事后 per-face 读出")**已被推翻**,不要再引用。
 
-音频侧:   a_≤t ─►[音频编码器(热启动)]─►[音频-LLM 骨干(热启动·因果·LoRA)]─► H[t]   (共享一次前向)
-视觉侧:   f_k  ─►[视觉编码器]─► 每张脸 visual tokens 作 Q_k[t]
-读出:     R_k[t] = per-face CrossAttn(Q_k[t], K=V=H[≤t])   —— 变长 K、每人独立
-输出:     forward 只吐 logits;每张脸 k、每 chunk 一组
-```
-- 骨干 **Route A**(热启动,不从零)→ **✅ 已定 = X2-Turn(Voxtral 流式版),选型论证见 §8**。
-- 原则:**视觉做归属、音频做内容+完整性**(探针实证)。
-- 训练:S1 冻骨干训视觉+读出+头 → S2 LoRA r=32;损失 `asr_loss + Σ_k per-face 状态损失`
-  (incomplete→误判 complete 加权);视觉 dropout p≈0.3;单测(恒等性/帧对齐/零初始化);
-  视觉失效→退纯音频。
+**已定** ✅
+- 骨干 = **X2-Turn(Voxtral 流式版,X2-Turn-4B-0812)**,Route A 热启动(论证见 §8)。
+- **★ 两级条件化**:视觉在**音频编码器浅层**做 per-face 掩码(管分离/ASR),
+  又在 **LLM 层**做零初始化门控 cross-attn(管状态/addressee)。batch 维 = 流数。
+- **流 = 画面内 K_t 张脸 ＋ 一条常驻 `others`**(画外说话人残差桶),恒 ≥ 1 条。
+- 输出(每流每 80 ms):`asr_logits` + `state_logits`(3 态判别式) + `addr_logits`(二分类,others 永久弃权)。
+- 原则:**视觉做归属与朝向、音频做内容与完整性**(探针实证)。
 
-### 3.2 我的建议(等你逐条确认)💡
-- **§5.2 状态读出 → 判别式**。依据:探针 A 在冻结 hidden 上训线性头即得 0.99,完整性线性可读;
-  判别式低延迟、per-face K 头天然并行、评测直接出 AUC。
-- **§5.1 粒度 → 把"读出"和"ASR 解码"解耦**:
-  - per-face 读出 R_k(带 Q_k 的 cross-attn)**强制 K 套**——分解的本体,不可砍。
-  - per-face 状态头 **强制 K 套**(判别式小头,极便宜)。
-  - ASR 文本解码 → **共享一个解码器,按脸/按需 per-stream 调用**(避免常驻 ×K 的 ASR 成本)。
-- **状态设计 → 3 态单头** `{静默 · 说话-incomplete · 说话-complete}`(active 与 completeness 天然耦合);
-  **addressee 单独一个 per-face 二分类头** `{对我说 · 不对我说}`(由视觉朝向驱动,与状态正交)。
-- **§8.2 视觉编码器 → 复用预训练唇动/脸动塔**(AV-HuBERT 视觉前端 / Light-ASD·TalkNet 类 ASD 骨干),
-  **人脸检测+跟踪做成前置冻结模块**产出稳定轨迹,再送共享视觉编码器;保持可插拔。
-  注:addressee 需注视/头姿信息 → 视觉塔须保留或加一路**注视/头姿**特征(探针 B 用过 FaceLandmarker 头姿)。
+**v6.2 为什么要两级**(2026-09-22 文献调研):多说话人 ASR 的四类主流架构
+**无一例外把说话人线索注入声学层或编码器状态**,没有一个放在编码器下游的语言模型里;
+而 v6/v6.1 恰好放在了后者。我们的噪声 gate 0.47 测的就是编码器**之后**的 hidden,
+其含义可能是"信息在到达那里之前就已被抹掉"。详见 `architecture.md` §3.0 与 §9。
 
-### 3.3 仍待定 ⏳
-- §8.3 骨干适配:LoRA r=32 起步,全微调作 fallback(待数据量定)。
-- §8.4 重叠段策略:uncertain 起步;视觉引导分离作**条件升级**(依恢复实验)。
-- ~~§8.5 addressee 作后续扩展~~ → **已提级进核心 setting**(第 4 个 per-face 输出,见 §1/§3.2)。
+**仍待决**(完整清单见 `architecture.md` §10):注入深度三臂实验(A/B/C,**最高优先**)、
+视觉编码器选型、数据方案(**MISP-Meeting 可行性优先**)、评测协议对齐 cpWER/cpCER + Pareto 曲线。
 
 ---
 
@@ -148,13 +133,15 @@
 
 ## 5. 待逐条细化的清单(讨论 backlog)
 
-1. §5.2 判别式 是否拍板?(💡→✅)
-2. §5.1 "读出/ASR 解耦" + 3 态单头 是否接受?
+1. ~~§5.2 判别式 是否拍板?~~ → ✅ **已拍板判别式**(architecture.md §4.2)
+2. ~~§5.1 "读出/ASR 解耦" + 3 态单头~~ → ✅ **3 态单头已定**;"解耦"降为**部署期优化**,
+   主模型走每流独立 ASR(architecture.md §4.3 / §8.6)
 3. §8.2 视觉编码器候选:AV-HuBERT vs Light-ASD/TalkNet vs 其它;检测跟踪器选型。
 4. C1/C3 如何切干净、各自独立成立的边界。
 5. 数据集方案:全自建 vs 复用/扩展 AVCocktail(代码公开,最多 8 人)加双轴标注。
 6. 级联 baseline 各模块具体选型 + 适配 MuVAP/AV-Dialog 的方式。
-7. 恢复实验(C2 判据)的具体设计与先后。
+7. 恢复实验 → ✅ **已定为注入深度三臂(A/B/C)同跑**,兼作 C2 判据与架构判据
+   (architecture.md §8.1);⏳ 剩余待定 = 分档标准与标签质量升级。
 8. ✅ **已核实**:per-face "is-speaking + is-done" 的 ASD 文献核实(结论见 §6)。
 9. addressee 轴:标签定义("对系统说" vs "对旁人说")、数据视角(需第一人称/机器人视角)、
    相关工作核实(多人 HRI addressee detection 已有文献 → 新颖性须落在**联合 per-face 组合**,非 addressee 单独)。
@@ -198,7 +185,12 @@
 | **addressee 轴** | ⚠️ **单独已被占** | 多人 addressee 是活跃任务([Structure of Address](https://www.alphaxiv.org/abs/2607.15648)、[HiBRIDGE](https://www.alphaxiv.org/abs/2609.08678))→ novelty 只在**四轴联合 per-face**,addressee 单拎不算贡献。 |
 
 **总判决**:在**精确措辞**下三条贡献成立;在**宽泛措辞**下会被逐条击穿。三条必守口径:
-1. C2 = **新任务首次系统实现 + strong AV baseline**(输出 per-face 语义状态,非波形),**绝不写**"首个视觉引导 per-face 提取/路由"。
+1. C2 = **新任务首次系统实现 + strong AV baseline**(输出 per-face 语义状态,非波形)。
+   **不得写**:"首个视觉引导 per-face 提取/路由"、"首个 per-face 多流架构"、"首个多实例条件化"——
+   ⚠️ **2026-09-22 追加**:"多实例 + 线索条件化"已是被系统研究过的成熟范式
+   ([NVIDIA 四类架构比较](https://www.alphaxiv.org/abs/2609.10265) 把它列为一类并测出它最优),
+   不只是 AV-TSE 机制不新。能守住的只有**输出轴**:那四篇的输出全是 "who said what" 的转写,
+   **无一输出语义完整性**。文献依据见 `architecture.md` §9。
 2. "done" = **语义完整**(§6);addressee = **仅作四轴联合的一轴**。
 3. C1↔C3 切开(数据资产 vs 协议+失败诊断),且都与 HEAR/AVCocktail 显式区分。
 
