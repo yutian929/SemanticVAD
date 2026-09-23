@@ -44,8 +44,10 @@
 | `plan/` | 两份权威文档 + 执行记录 |
 | `scripts/` | 探针脚本（`probe_a_*` / `probe_b_*` / `probe_gate_*` / `probe_noise_*`） |
 | `results/` | 探针产物（特征 npz、报告 json） |
-| `tests/` | 单测 |
-| `annotate/` · `avsvad/` · `configs/` | 标注工具、包骨架、配置（多为占位） |
+| `tests/` | 单测（现仅探针 golden；模型单测待建） |
 | `models/` | `face_landmarker.task`（MediaPipe） |
+
+> **2026-09-23 清理**：删除了空占位骨架 `avsvad/`（旧 v5 包结构）、`configs/`、`annotate/`。
+> 模型代码尚未开始——待方案讨论定稿后按 `plan/architecture.md` v6.2 重建包结构。
 
 **不改三个只读第三方目录**（`X2-Turn/`、`SoulX-Duplug/`、`SoulX-Duplug-training/`），见 [`../THIRD_PARTY.md`](../THIRD_PARTY.md)。
