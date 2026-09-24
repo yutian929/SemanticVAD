@@ -9,6 +9,125 @@
 
 ---
 
+## 业务锚点 · 导购机器人场景与三条数据流(2026-09-23 起草,待审核)💡
+
+> **本节 = 把 new setting 落到一个真实产品场景(门店导购机器人),供逐条审核。**
+> 参照系 = 小鹏 IRON 展示的四大能力(自主朝向管理 / 动态多维身份记忆 / 多语言无感切换 / 多元智能问答)。
+> 🚨 **纪律**:IRON 是产品 demo,用 **9 麦阵 + 声纹 + 云端/三芯**。**我们的论文贡献不与之对齐**——
+> 我们刻意收窄到"**单目 RGB + 单路混合音频**"的更难 setting,护城河仍是 **per-face 语义完整性**(§1)。
+> 本节只界定"业务要什么、我们的模型供什么、什么归系统层/正交模块",**不扩张新颖性口径**。
+
+### 场景
+
+门店里**新人与熟人同时入画**,机器人第一人称视角。核心业务动作:认出**谁在对我说话**、听懂他**说完没**、
+(对熟人)调出偏好档案作答、并**转身面向**当前说话人。→ 天然是**多人同框 + 流式 + 第一人称**,正是本项目的
+new setting;且"对谁说"(addressee)在这里不是可选项,而是**驱动机器人转向的必需信号**。
+
+### 三条数据流(业务视角 · 横版)
+
+```mermaid
+flowchart LR
+    classDef scene fill:#e3f2fd,stroke:#1565c0,color:#0d1b2a;
+    classDef sense fill:#e8f5e9,stroke:#2e7d32,color:#0d1b2a;
+    classDef brain fill:#f3e5f5,stroke:#6a1b9a,color:#0d1b2a;
+    classDef mem   fill:#eceff1,stroke:#546e7a,color:#0d1b2a,stroke-dasharray:5 4;
+    classDef act   fill:#fff3e0,stroke:#e65100,color:#0d1b2a;
+
+    subgraph S1["① 门店场景"]
+        C["多位顾客围在机器人前<br/>有新人、有熟人<br/>可能同时或轮流说话"]:::scene
+    end
+
+    subgraph S2["机器人怎么看和听"]
+        EYE["摄像头(看)<br/>看清每个人的脸<br/>谁的嘴在动 · 谁朝着我"]:::sense
+        EAR["麦克风(听)<br/>听到混在一起的说话声"]:::sense
+    end
+
+    subgraph S3["② 机器人的理解<br/>(对画面里每个人分别判断)"]
+        U["① 他在不在说话<br/>② 他说了什么<br/>③ 这句说完了没<br/>④ 他是不是在对我说"]:::brain
+    end
+
+    subgraph S4["认人(记忆)"]
+        M["新客还是老客?<br/>老客调出他的喜好档案"]:::mem
+    end
+
+    subgraph S5["③ 机器人怎么做"]
+        A1["转身面向<br/>正在对我说话的人"]:::act
+        A2["等他说完再开口<br/>不抢话、不打断"]:::act
+        A3["结合他的喜好<br/>开口回答"]:::act
+    end
+
+    C --> EYE
+    C --> EAR
+    EYE --> U
+    EAR --> U
+    EYE -.-> M
+    U --> A1
+    U --> A2
+    U --> A3
+    M -.-> A3
+```
+
+> 图里"②机器人的理解"是本项目的核心(对**每个人**同时判 4 件事);"认人/记忆"是**旁边的独立模块**(虚线),不在核心里。
+
+### 插件怎么装进技术流程(前面接什么 · 后面接什么 · 横版)
+
+```mermaid
+flowchart LR
+    classDef up   fill:#e8f5e9,stroke:#2e7d32,color:#0d1b2a;
+    classDef plug fill:#f3e5f5,stroke:#6a1b9a,color:#0d1b2a,stroke-width:3px;
+    classDef old  fill:#f5f5f5,stroke:#9e9e9e,color:#616161,stroke-dasharray:5 4;
+    classDef down fill:#fff3e0,stroke:#e65100,color:#0d1b2a;
+    classDef mem  fill:#eceff1,stroke:#546e7a,color:#0d1b2a,stroke-dasharray:5 4;
+
+    subgraph IN["前面接什么(输入侧)"]
+        CAM["摄像头"]:::up
+        MIC["麦克风<br/>(产品若用麦阵, 先降成单路)"]:::up
+        TRACK["人脸检测 + 跟踪<br/>(前置件, 多为现成)"]:::up
+        CAM --> TRACK
+    end
+
+    subgraph CORE["★ 我们的插件"]
+        PLUG["【端到端 视听感知插件】<br/>输入: 每张脸的视频轨迹 + 单路混合音频<br/>输出: 每人每80ms<br/>「在不在说 · 说了什么 · 说完没 · 是否对我说」+ others"]:::plug
+        OLD["它一个顶一串:<br/>打包替代了以往的级联<br/>语音检测VAD → 说话人分离 → ASR → 端点检测 → 对谁说"]:::old
+        OLD -. 被替代 .-> PLUG
+    end
+
+    subgraph OUT["后面接什么(输出侧)"]
+        LLM["对话大模型 + 本地知识库/联网检索<br/>→ 生成回答内容(多语言)"]:::down
+        MOTOR["运动控制<br/>转身面向说话人(头/腰/腿)"]:::down
+        TTS["语音合成 TTS + 播放"]:::down
+        MEM["身份记忆 / re-ID (旁路)<br/>新客老客 · 偏好档案"]:::mem
+    end
+
+    TRACK --> PLUG
+    MIC --> PLUG
+    PLUG -->|"每人的干净事件"| LLM
+    PLUG -->|"谁在对我说+位置"| MOTOR
+    PLUG -.->|"人脸特征"| MEM
+    MEM -.->|"熟人偏好"| LLM
+    LLM --> TTS
+    TTS -. "说话时仍在听,可被插话打断" .-> PLUG
+```
+
+> **一句话**:插件**前面**接传感器与人脸跟踪(把画面切成一张张脸)、**后面**接对话大模型/运动控制/语音合成;
+> 它自己吃掉的是**过去那段最脏的级联**(VAD+分离+ASR+端点+addressee)。上下游都是**现成组件**,我们只定义接口。
+
+
+### IRON 四能力 → 落到我们哪里(哪些是本文、哪些是正交模块)
+
+| IRON 能力 | 落到我们哪里 | 状态 |
+|---|---|---|
+| 自主朝向管理(声辨位 + 唇动锁人 + 转向) | 归属由**视觉**做(**非 DoA**);转向在**系统层**消费 addressee | ✅ 覆盖(机制不同) |
+| 动态多维身份记忆(认人、新人/熟人、偏好档案) | **正交模块**:人脸 re-ID + 对话记忆;**不进 per-face forward**(architecture §3.6 明确不 enroll/re-ID) | 💡 非本文贡献 |
+| 多语言无感切换 | 骨干 / ASR 头能力,**非架构轴** | ⏳ 看骨干多语言支持 |
+| 多元智能问答(本地库 + 联网) | **系统层**应答生成,消费 per-face 输出 + 身份档案 | ✅ 系统层 |
+
+**净结论(待审核)**:导购场景把 new setting 坐实为真实产品,并让 **addressee 从"第 4 个输出"升级为"驱动转向的必需信号"**;
+但它也带进两个**我们刻意不做、须归为系统层或正交模块**的东西——**麦阵/DoA** 与 **身份记忆/re-ID**。
+论文护城河不变:**per-face 语义完整性**(§1)。产品要"新人/熟人",那是记忆模块的事,**不改模型 forward、不进新颖性口径**。
+
+---
+
 ## 0. 一句话
 
 > 在**多人同框、流式**的新 setting 下,对画面内**每个人**逐 chunk 联合判
