@@ -10,9 +10,95 @@
 >   又在 **LLM 层**做门控 cross-attn（管状态/addressee）。batch 维 = 流数。
 > - **流的集合 = 画面内 K_t 张脸 ＋ 一条常驻 `others` 流**，恒 ≥ 1 条。
 >
+> **★ 模型边界（2026-09-24 拍板）✅**：**身份不归模型管。** 新客/熟人判定、re-ID、`person_id`、名字
+> 全部由**前置视觉系统**在进入模型之前给定。模型只负责每个人的
+> **{在不在说 · 是否在对我说 · 说完没}**（外加 ASR 文本）。
+>
+> **★ 人脸输入假设（2026-09-24 拍板）✅**：**传进来的每张脸都是稳定、完整可见的。**
+> 只要前置系统给出某个 `person_id`，这一帧他的脸就一定完整露出（不遮挡、不背身、不模糊）；
+> 看不清的脸由前置系统负责**不传**。因此输入里**没有 `valid` 标记**，模型不处理遮挡。
+>
+> **★ 资源前提（2026-09-24 拍板）✅**：人力、物力、算力充足，**数据不是问题**（详见 cvpr-framing 文首）。
+> 本文件的设计取舍一律**不以数据量 / 算力为约束**；下文凡与 AMI 规模对比处，只作为参照系，不作为风险。
+>
 > 标记：✅ 已定 ｜ 💡 建议待拍板 ｜ ⏳ 待实验定 ｜ ⚠️ 风险
 >
-> **最后更新**：2026-09-22（v6.2）
+> **最后更新**：2026-09-24（v6.2；补资源前提，§8.5 改写；新增 §0 端到端总览；状态改为 X2-Turn 6 类）
+
+---
+
+## 0. 端到端总览（自顶向下 · 先把模型当黑盒）
+
+> 本节只回答一件事：**模型吃什么、吐什么。** 内部怎么拆，从 §1 起逐层展开。
+
+```mermaid
+flowchart LR
+    classDef inp  fill:#e8f5e9,stroke:#2e7d32,color:#0d1b2a;
+    classDef core fill:#f3e5f5,stroke:#6a1b9a,color:#0d1b2a,stroke-width:3px;
+    classDef outp fill:#fff3e0,stroke:#e65100,color:#0d1b2a;
+    classDef sys  fill:#eceff1,stroke:#546e7a,color:#0d1b2a,stroke-dasharray:5 4;
+
+    subgraph IN["输入 · 流式，每 80 ms 一帧"]
+        F["带身份的人脸轨迹 × K<br/>person_id · 脸/嘴 crop · 头姿/视线<br/>（前置视觉系统给定，保证完整可见）"]:::inp
+        A["单路混合音频 16 kHz<br/>画面内外所有人的声音混在一起"]:::inp
+    end
+
+    M["★ AV-SemanticVAD 端到端模型<br/>对每个人分别判断"]:::core
+
+    subgraph OUT["输出 · 每 80 ms，每条流一行"]
+        O1["person_id_1 → 在不在说 · 说完没 · 对不对我说 · 说了什么"]:::outp
+        O2["……"]:::outp
+        OK["person_id_K → 在不在说 · 说完没 · 对不对我说 · 说了什么"]:::outp
+        OO["others（画外的人）→ 在不在说 · 说完没 · 说了什么<br/>（看不到脸，不判对不对我说）"]:::outp
+    end
+
+    F --> M
+    A --> M
+    M --> O1
+    M --> O2
+    M --> OK
+    M --> OO
+    OUT -.-> SYS["系统层（不属于模型）<br/>某人说完且对我说 → 写入记忆库 · 触发回答 · 转身"]:::sys
+```
+
+### 0.1 输入
+
+| 输入 | 内容 | 来源 |
+|---|---|---|
+| **人脸轨迹 × K**（K 可为 0，随人进出变化） | 每张脸：`person_id`、脸/嘴 crop、头姿 + 视线。**传进来的脸一定完整可见** | 前置视觉系统（检测 + 跟踪 + 认人），**身份在进模型前已确定** |
+| **混合音频** | 单通道 16 kHz，画面内外所有人的声音 | 麦克风（阵列先降成单路） |
+
+### 0.2 输出（每条流 × 每 80 ms）
+
+流 = 画面内 K 张脸各一条 ＋ 一条常驻 `others`（画外的人），共 K+1 条。
+
+| 输出 | 取值 | 回答的问题 | 实现（§4） |
+|---|---|---|---|
+| `person_id` | 原样透传 | 这一行是谁 | 不参与计算 |
+| 状态 | 沿用 X2-Turn 6 类：`idle` / `noidle` / `speaking` / `turn_end` / `backchannel` / `uncertain` | **在不在说 · 说完没 · 是不是附和** | `state_logits`，6 类单头（§4.1） |
+| addressee | `对我说` / `不对我说` / 弃权 | **是不是在对机器人说** | `addr_logits`；`others` 弃权（看不到脸） |
+| 文本 | 这一帧新增的 1 个 token；没有新字时为空（PAD） | **说了什么**（系统层按人拼接成句） | `asr_logits`，每人一条独立 ASR |
+
+```json
+// 某一 80 ms 帧的输出示例（K=2）
+[
+  {"person_id": "p_0042", "state": "turn_end",    "addressee": "对我说",   "text_delta": "奶"},
+  {"person_id": "p_0043", "state": "backchannel", "addressee": "不对我说", "text_delta": "嗯"},
+  {"person_id": "others", "state": "idle",        "addressee": "弃权",     "text_delta": ""}
+]
+```
+
+> 模型**到输出为止**。"什么时候回应、回应谁、写不写记忆库"都在系统层（见 cvpr-framing「业务闭环」）。
+
+### 0.3 往下怎么拆（阅读路线）
+
+| 层级 | 看什么 | 位置 |
+|---|---|---|
+| L0 · 黑盒 | 输入 / 输出 | **本节** |
+| L1 · 模块图 | 视觉塔、音频编码器、两级视觉注入（L1 掩码 / L2 门控）、三个输出头怎么连 | §1 |
+| L2 · 模块细节 | 输入参数 → 每个模块内部 → 输出头 | §2 → §3 → §4 |
+| 运行时行为 | 画面 0 / 1 / 多人时每条流输出什么 | §5 |
+| 训练 · 单测 · 风险 | 怎么训、测什么、哪里会坏 | §6 → §8 |
 
 ---
 
@@ -32,43 +118,38 @@
 
 ## 1. 一页纸总览
 
-```
-                        ┌─── 前置冻结模块（不参与梯度）────┐
-  单目 RGB (多人同框) ──►│  人脸检测 + 跟踪 → K_t 条轨迹    │──► 每脸: 脸/嘴 crop + 头姿/注视 + valid
-                        └───────────────┬─────────────────┘
-                                        ▼
-                              ┌────────────────────┐
-                              │ 视觉塔（共享权重）  │
-                              └────┬──────────┬────┘
-                     v_k@50Hz (给编码器)   v_k@12.5Hz (给 LLM)
-                                   │          │
-  混合音频 ─►[embedder: 2×因果卷积]─┼──────────┼──  100Hz→50Hz, d=1280, 1× 共享
-     16kHz         │                │          │
-                   ▼                ▼          │
-            [编码器 层1-2]  1× ──► ★ per-face 掩码注入（Sidecar 式）
-                                    │
-                            ┌───────┴────────┐
-                            │ [层3-32] × K条  │  各自 KV cache，d=1280
-                            └───────┬────────┘
-                                    ▼
-                          [projector 1280×4→3072]  50Hz→12.5Hz (80ms)
-                                    │
-                            ┌───────┴────────┐
-                            │ [LLM 26层] × K │ ◄── ★ 门控 cross-attn 注入 v_k@12.5Hz
-                            │   d=3072        │     （零初始化，因果）
-                            └───────┬────────┘
-                                    ▼ H_k[t]  每流独立 hidden
-                    ┌───────────────────────────────────────┐
-                    │ forward 只吐 logits（每流 × 每帧）     │
-                    │  asr_logits   [B,K+1,T,131072]        │
-                    │  state_logits [B,K+1,T,3]             │
-                    │  addr_logits  [B,K+1,T,2]             │
-                    └───────────────────────────────────────┘
-                                 ← 模型到此为止；解码与仲裁属系统层（§5.5）
+```mermaid
+flowchart LR
+    classDef inp  fill:#e8f5e9,stroke:#2e7d32,color:#0d1b2a;
+    classDef vis  fill:#e3f2fd,stroke:#1565c0,color:#0d1b2a;
+    classDef aud  fill:#fffde7,stroke:#f9a825,color:#0d1b2a;
+    classDef star fill:#f3e5f5,stroke:#6a1b9a,color:#0d1b2a,stroke-width:3px;
+    classDef outp fill:#fff3e0,stroke:#e65100,color:#0d1b2a;
+
+    FACE["人脸轨迹 × K<br/>person_id · crop · 头姿/视线<br/>(前置视觉系统)"]:::inp
+    OTH["others 流<br/>可学习嵌入"]:::inp
+    AUD["混合音频<br/>16 kHz"]:::inp
+
+    VT["视觉塔<br/>共享权重"]:::vis
+    EMB["embedder<br/>2×因果卷积 · 100→50 Hz<br/>1× 共享"]:::aud
+    E12["编码器 层1-2<br/>d=1280 · 1× 共享"]:::aud
+    L1["★ L1 per-face 掩码<br/>分出每条流的声学表征"]:::star
+    E332["编码器 层3-32<br/>× (K+1) 流 · 各自 KV cache"]:::aud
+    PROJ["projector<br/>1280×4→3072<br/>50→12.5 Hz (80 ms)"]:::aud
+    LLM["LLM 26 层 × (K+1)<br/>★ L2 门控 cross-attn<br/>零初始化 · 因果"]:::star
+    HEAD["三个输出头(共享)<br/>asr · state · addr"]:::outp
+    OUT["每流 × 每 80 ms logits<br/>→ 系统层"]:::outp
+
+    FACE --> VT
+    VT -->|"v_k^enc @50 Hz"| L1
+    VT -->|"v_k^llm @12.5 Hz"| LLM
+    OTH -.-> L1
+    OTH -.-> LLM
+    AUD --> EMB --> E12 --> L1 --> E332 --> PROJ --> LLM --> HEAD --> OUT
 ```
 
 **一句话**：混合音频的浅层声学表征被每张脸的视觉**掩码分离**，分离后的 K 条流各自过骨干，
-再在语言层被同一张脸的视觉**二次条件化**，输出 per-face 的 `{ASR · 三态 · addressee}`；
+再在语言层被同一张脸的视觉**二次条件化**，输出 per-face 的 `{ASR · 状态（X2-Turn 6 类） · addressee}`；
 另有一条常驻 `others` 流兜住画外声音。
 
 ---
@@ -97,7 +178,8 @@
 |---|---|
 | 形态 | **单目 RGB**，多人同框 |
 | 前置模块（冻结） | 人脸检测 + 跟踪 → 第 t 帧 `K_t` 条稳定轨迹 |
-| 每条轨迹产出 | ① 脸/嘴 ROI crop；② 头姿 + 注视向量；③ **`valid_k[t] ∈ {0,1}`** |
+| 每条轨迹产出 | ① 脸/嘴 ROI crop；② 头姿 + 注视向量；③ **`person_id`**（前置视觉系统已完成认人/re-ID） |
+| `person_id` 的用法 | **只作为流的标签透传到输出**，不进入任何计算；模型不做认人、不存身份 |
 | 时间对齐 | 视频 25–30 fps → **上采样到 50 Hz**（给编码器）＋ **池化到 12.5 Hz**（给 LLM） |
 | `K_t` | **变长**，0 起步，允许人中途进出（§3.6） |
 | **流的总数** | `K_t + 1`（K 张脸 ＋ 常驻 `others`），**恒 ≥ 1** |
@@ -132,18 +214,24 @@
 | 级 | 位置 | 职责 | 对应的模态分工 |
 |---|---|---|---|
 | **L1** | 编码器浅层（层 2 后） | **声学分离**：把混音里属于这张脸的部分掩出来 | 视觉做**归属** |
-| **L2** | LLM 各层 | **语义条件化**：状态三态 + addressee | 音频做**内容/完整性**，视觉给**朝向** |
+| **L2** | LLM 各层 | **语义条件化**：说话状态 + addressee | 音频做**内容/完整性**，视觉给**朝向** |
 
 ⏳ **注入深度本身是待测超参**，不是信仰：恢复实验的主轴就是它（§8.1）。
 
 ### 3.1 视觉塔 💡（选型待拍板，接口已定）
 
-```
-crop_k[t]  ─►[视觉编码器: 预训练唇动/脸动塔]─► e_k[t]
-pose_k[t]  ─►[小 MLP]───────────────────────► g_k[t]
-      concat ─┬─► Linear(· → 1280) ─► v_k^enc[t]   @50 Hz    给 L1 掩码
-              └─► Linear(· → 3072) ─► v_k^llm[t]   @12.5 Hz  给 L2 门控
-valid_k[t] = 0  ⇒  v_k^enc[t] := 0 且 v_k^llm[t] := 0        # 硬置零
+```mermaid
+flowchart LR
+    classDef inp  fill:#e8f5e9,stroke:#2e7d32,color:#0d1b2a;
+    classDef vis  fill:#e3f2fd,stroke:#1565c0,color:#0d1b2a;
+    classDef outp fill:#f3e5f5,stroke:#6a1b9a,color:#0d1b2a;
+
+    CROP["crop_k[t]<br/>脸/嘴 ROI"]:::inp --> ENC["视觉编码器<br/>预训练唇动/脸动塔"]:::vis --> E["e_k[t]"]:::vis
+    POSE["pose_k[t]<br/>头姿 + 视线"]:::inp --> MLP["小 MLP<br/>(独立支路)"]:::vis --> G["g_k[t]"]:::vis
+    E --> CAT["concat"]:::vis
+    G --> CAT
+    CAT --> PE["Linear(· → 1280)"]:::vis --> VE["v_k^enc[t] @50 Hz<br/>→ L1 掩码"]:::outp
+    CAT --> PL["Linear(· → 3072)"]:::vis --> VL["v_k^llm[t] @12.5 Hz<br/>→ L2 门控"]:::outp
 ```
 
 - 编码器候选：💡 **AV-HuBERT 视觉前端**（唇动，96×96 ROI，输出序列表征，原生 25 fps 便于上采样到 50 Hz）
@@ -152,6 +240,25 @@ valid_k[t] = 0  ⇒  v_k^enc[t] := 0 且 v_k^llm[t] := 0        # 硬置零
 - ⏳ 两条投影是否共享主干、`v^enc` 每帧几个 token，实现期定。
 
 ### 3.2 L1 · 编码器浅层 per-face 掩码（v6.2 新）💡
+
+```mermaid
+flowchart LR
+    classDef aud  fill:#fffde7,stroke:#f9a825,color:#0d1b2a;
+    classDef vis  fill:#e3f2fd,stroke:#1565c0,color:#0d1b2a;
+    classDef star fill:#f3e5f5,stroke:#6a1b9a,color:#0d1b2a,stroke-width:3px;
+
+    H2["h^(2)[t]<br/>编码器层1-2 输出<br/>1× 共享 · 50 Hz"]:::aud
+    VE["v_k^enc[t]"]:::vis
+    MN["MaskNet<br/>因果膨胀卷积 · 共享权重"]:::star
+    MUL(("⊙")):::star
+    HK["h_k^(2)[t]<br/>第 k 条流"]:::aud
+    E332["编码器层3-32<br/>第 k 条流 · 自己的 KV cache"]:::aud
+
+    H2 --> MN
+    VE --> MN
+    MN -->|"m_k[t] ∈ (0,1)^1280"| MUL
+    H2 --> MUL --> HK --> E332
+```
 
 ```
 h^(2) = 编码器层1-2( embedder(mel) )              # 1× 共享，d=1280 @50Hz
@@ -206,9 +313,8 @@ prediction_index = prefix_length + frame_index - 1        # inference.py:165，n
 |---|---|
 | 新轨迹出生 | **新开一条流**，编码器层3-32 与 LLM 的 KV cache 均从当前时刻冷启动 |
 | 轨迹存活 | 增量解码，维护自己的两套 KV cache |
-| 轨迹丢失 | 该流**销毁**，两套 cache 释放 |
-| 短暂遮挡（`valid=0`，轨迹未死） | 流保留，`v_k:=0` → 这几帧退化为纯音频行为 |
-| 人离开又回来 | **算新轨迹、新流**（不做身份 enroll / re-ID） |
+| 轨迹丢失（前置系统不再传这个 `person_id`） | 该流**销毁**，两套 cache 释放 |
+| 人离开又回来 | **新开一条流**（KV cache 冷启动）；身份由前置系统给回同一个 `person_id`，输出照常挂在他名下。模型自身不做 enroll / re-ID |
 
 ⚠️ 新流冷启动拿不到出现之前的上下文；前几百 ms 判决不可信 → 系统层按 uncertain 处理。
 
@@ -275,23 +381,41 @@ PIT、SOT、以及 NVIDIA 专门发明的 **PI-DTW**，存在的**全部理由**
 | 输出 | 形状 | 实现 | 热启动 |
 |---|---|---|---|
 | `asr_logits` | `[B,K+1,T,131072]` | 复用 `base_model.lm_head` | ✅ 继承 X2-Turn |
-| `state_logits` | `[B,K+1,T,3]` | **新** `Linear(3072,3,bias=False)` | ✅ 拷 `vad_lm_head` 第 35/37/38 行 |
+| `state_logits` | `[B,K+1,T,6]` | **新** `Linear(3072,6,bias=False)` | ✅ 拷 `vad_lm_head` 第 35–40 行（6 行全拷） |
 | `addr_logits` | `[B,K+1,T,2]` | **新** `Linear(3072,2,bias=False)` | ❌ 随机；`others` 行永久弃权 |
 
 三个头在人脸流与 `others` 流之间**共享权重**。
 
-### 4.1 状态三态 ✅
-`{0 静默 · 1 说话-incomplete · 2 说话-complete}` —— active 与 completeness 天然耦合，单头即可。
+### 4.1 状态：沿用 X2-Turn 6 类 ✅（2026-09-24 改，取代原三态）
 
-**热启动**：`vad_lm_head` 是 `lm_head` 的整词表拷贝，只有 id 35–40 有意义
-（`modeling.py:15-23`：`idle/noidle/speaking/turn_end/backchannel/uncertain`）：
+| id | 类 | 含义 | 业务上怎么用 |
+|---|---|---|---|
+| 35 | `idle` | 没在说话 | — |
+| 36 | `noidle` | 有声音但无语义（清嗓、咳嗽、开口前的"呃"） | 不能打断机器人 |
+| 37 | `speaking` | 在说有语义的话，还没说完 | 在说；机器人说话时可打断 |
+| 38 | `turn_end` | **说完了**（持续 1–2 帧的**事件**，之后回到 `idle`） | 触发回答 = **语义完整性** |
+| 39 | `backchannel` | 附和（"嗯嗯""对""好的"） | 不打断、不回答、不写记忆库 |
+| 40 | `uncertain` | 拿不准 | 系统层按低置信处理 |
+
+**为什么不用原三态** `{静默 · 说话-incomplete · 说话-complete}`：
+1. 原三态把 `turn_end` 当成持续状态，但在 X2-Turn 里它是**说完那一刻的 1–2 帧事件**
+   （`README.md:125-126`：说话 → `turn_end` → `idle`），标签定义与热启动来源对不上。
+2. 原三态丢掉了 `noidle` / `backchannel` / `uncertain`，而这三类正是 X2-Turn 控制器判断
+   "能不能打断、是不是附和"的依据（`turn/controller.py` 顶部规则）。
+
+**热启动**：`vad_lm_head` 是 `lm_head` 的整词表拷贝，只有 id 35–40 有意义（`modeling.py:15-23`）：
 
 ```
-state_head.weight[0] ← vad_lm_head.weight[35]   # 静默            ← idle
-state_head.weight[1] ← vad_lm_head.weight[37]   # 说话-incomplete ← speaking
-state_head.weight[2] ← vad_lm_head.weight[38]   # 说话-complete   ← turn_end
+state_head.weight[0:6] ← vad_lm_head.weight[35:41]   # 6 行全拷，顺序与 TURN_CLASS_NAMES 一致
 ```
-→ day-0 就不是随机头。探针 A（0.99）已证完整性在 hidden 里**线性可读**。
+→ day-0 就等于 X2-Turn 原头。探针 A（0.99）已证完整性在 hidden 里**线性可读**。
+
+**业务三问在系统层推导**（每个人各跑一份 X2-Turn 现成的 `FrameTurnController`）：
+- **在不在说** = `speaking` / `turn_end`（附和与杂音不算）
+- **说完没** = 出现 `turn_end`
+- **附和** = `backchannel`；⚠️ 机器人刚问完问题时，"嗯"是**回答**不是附和 —— 由控制器结合机器人状态改判，不归模型。
+
+**论文口径不变**："语义完整性"落在 `turn_end`（它属于 X2-Turn 的 `SEMANTIC = {speaking, turn_end}` 集合）。
 
 ### 4.2 判别式，不走生成式 ✅
 状态**不占词表槽位、不进 text 流**。低延迟、不 generate、K 个头并行、评测直接出 AUC、可独立降级。
@@ -302,8 +426,8 @@ state_head.weight[2] ← vad_lm_head.weight[38]   # 说话-complete   ← turn_e
 
 ### 4.4 addressee ✅ + 弃权规则
 per-face 二分类 `{对系统说 · 不对系统说}`，与状态正交。
-**⚠️ 硬规则**：`others` 流的 `addr_logits` **永久丢弃**；人脸流在 `valid_k[t]=0` 时**也必须丢弃**。
-注视信息只存在于视觉，无视觉时该头只能从音频 hidden 编造。弃权由前置模块的**确定性 mask** 执行。
+**⚠️ 硬规则**：`others` 流的 `addr_logits` **永久丢弃**。注视信息只存在于视觉，`others` 没有脸，
+该头只能从音频 hidden 编造。人脸流按输入假设总是完整可见，不需要弃权。
 
 ### 4.5 系统层（不属模型 forward）
 `state` × `addressee` × `ASR 文本` → "该不该现在回应他 / 回应谁"。
@@ -325,8 +449,8 @@ per-face 二分类 `{对系统说 · 不对系统说}`，与状态正交。
 
 | 子情形 | `face_1` | `others` | 靠什么 |
 |---|---|---|---|
-| **2a · 音频是他发的** | `✎` state∈{1,2}、ASR=他的话、addressee 由注视定 | `·` | 探针 A regime（0.99） |
-| **2b · 音频来自画外**（他沉默） | `·` 静默 + 全 PAD | `✎` | **只能靠视觉**：唇不动 ⇒ 判"不属于我" |
+| **2a · 音频是他发的** | `✎` state∈{speaking, turn_end, backchannel, noidle}、ASR=他的话、addressee 由注视定 | `·` | 探针 A regime（0.99） |
+| **2b · 音频来自画外**（他沉默） | `·` `idle` + 全 PAD | `✎` | **只能靠视觉**：唇不动 ⇒ 判"不属于我" |
 
 > **★ 2b 是条件化是否真的生效的判据。** 未正确训练的模型会把听到的任何语音转写到眼前唯一那张脸上。
 > 三道防线：① 训练集含"脸在画面、音频来自他处"样本；② 静默脸 ASR 全 PAD（负向）；
@@ -346,7 +470,7 @@ per-face 二分类 `{对系统说 · 不对系统说}`，与状态正交。
 **不强制划分**（允许 0 条或多条流同时说话）。
 
 ### 5.4 一张表看全
-`✎` = 出文本 + 三态说话类；`·` = 静默 + 全 PAD；`—` = 不存在
+`✎` = 出文本 + 说话类状态（`speaking`/`turn_end`/`backchannel`/`noidle`）；`·` = `idle` + 全 PAD；`—` = 不存在
 
 | 情形 | `K_t` | face 流 | `others` | 备注 |
 |---|---|---|---|---|
@@ -368,7 +492,8 @@ per-face 二分类 `{对系统说 · 不对系统说}`，与状态正交。
 参照系（§9）：合成两人混音最好 **4.66% WER**（Whisper-Sidecar / Libri2Mix）；
 真实会议流式最好 **16.18% cpWER（oracle）/ 23.36%（估计）**（NVIDIA SSA）。
 而那些系统用的是 **1 秒以上**上下文、**数千至数十万小时**训练数据。
-我们在 **80 ms** 约束下、数据量差两三个数量级 → **重叠段 per-face ASR 大概率不会好看**。
+数据量可以通过自采补齐（见文首资源前提），剩下的硬约束是 **80 ms**：上下文和前瞻都远少于它们
+→ **重叠段 per-face ASR 仍很可能不如这些离线/长上下文系统**（§8.3）。
 
 **但我们真正要的是重叠段的语义完整性**——三分类，比逐词转写宽容得多，有希望。
 **前提是 L1 注入成立**；若只有 L2（v6.1），连状态都可能救不回来（§3.0）。
@@ -392,18 +517,19 @@ per-face 二分类 `{对系统说 · 不对系统说}`，与状态正交。
 ```
 L = L_asr + λ_s · Σ_k L_state(k) + λ_a · Σ_k L_addr(k)
 ```
-- `L_state` 类加权：**incomplete 被误判为 complete（= 抢话）代价最高**。
-- `L_addr` 只在**人脸流**且 `valid_k=1` 的帧上算；`others` 不计。
+- `L_state` 类加权：**`speaking` 被误判为 `turn_end`（= 抢话）代价最高**；
+  其次是 `backchannel` 被误判为 `speaking` / `turn_end`（= 被附和打断）。
+- `L_addr` 只在**人脸流**上算；`others` 不计。
 - ⚠️ `others` 的 `L_state` / `L_asr` 需**下调权重或类平衡**，防垃圾桶化（§8.4）。
 - **视觉 dropout `p≈0.3`**（整段置零）→ 降级从结构保证升级为统计保证，
   同时批量制造情形 1，让 `others` 路径被真正训练。
 
 ### 6.3 ★ 标签：每帧语音都要有归宿，其余流一律全 PAD
 ```
-face k 帧 t 静默     ⇒ asr_label[k,t] = STREAMING_PAD_ID   且 state_label[k,t] = 0
-face k 帧 t 说话     ⇒ asr_label[k,t] = 他自己的词 token   且 state ∈ {1,2}
-others 帧 t 无画外音 ⇒ asr_label[o,t] = STREAMING_PAD_ID   且 state_label[o,t] = 0   ← 对称，不可省
-others 帧 t 有画外音 ⇒ asr_label[o,t] = 画外那句的词 token 且 state ∈ {1,2}
+face k 帧 t 没说话   ⇒ asr_label[k,t] = STREAMING_PAD_ID   且 state_label[k,t] = idle
+face k 帧 t 出声     ⇒ asr_label[k,t] = 他自己的词 token   且 state ∈ {noidle, speaking, turn_end, backchannel}
+others 帧 t 无画外音 ⇒ asr_label[o,t] = STREAMING_PAD_ID   且 state_label[o,t] = idle   ← 对称，不可省
+others 帧 t 有画外音 ⇒ asr_label[o,t] = 画外那句的词 token 且 state ∈ {noidle, speaking, turn_end, backchannel}
 ```
 - **负向**（人脸流 PAD）：惩罚"抢别人的话"。若缺失，最省力解是**忽略视觉**、每条流复述混合 ASR
   —— 那恰好是消融臂 A 的行为。
@@ -412,7 +538,7 @@ others 帧 t 有画外音 ⇒ asr_label[o,t] = 画外那句的词 token 且 stat
 
 ### 6.4 标签形态（C1 数据集接口）
 每段视频 × 每 80 ms 帧 × **每条流（K 条轨迹 ＋ 1 条 others）**：
-`{track_id | "others", valid, state ∈ {0,1,2}, addressee ∈ {0,1,弃权}, text token}`
+`{person_id | "others", state ∈ X2-Turn 6 类, addressee ∈ {0,1,弃权}, text token}`
 ＋ 段级元信息：`是否含画面外说话人`。
 
 > **★ 对标注流程的两条硬要求**：
@@ -468,15 +594,19 @@ VibeVoice 的消融是单调的：chunk 15→22 帧改善 cpWER 4.06 分；looka
 **防线**：① `others` 无画外音时也监督为全 PAD；② 损失权重下调/类平衡；③ §7.8 守门单测；
 ④ 盯**画内语音被判给 `others` 的比例** —— 比总 loss 灵敏得多。
 
-### 8.5 ⚠️⚠️ 最大的实际风险不是架构，是数据量
+### 8.5 ✅ 数据量不是风险（2026-09-24 改；原标题"最大的实际风险是数据量"作废）
+人力、物力、算力充足，训练数据可以**自采 + 自标到所需规模**。下表只作为**规模参照**，
+说明自采至少要做到什么量级，才能和强 baseline 公平对比：
+
 | 系统 | 训练数据 |
 |---|---|
 | Whisper-Sidecar | LibriMix / LibriSpeechMix |
 | NVIDIA SSA | Fisher + LibriSpeechMix + AMI + ICSI + NOTSOFAR-1 + 单人 Granary |
 | VibeVoice-ASR-Streaming | 42 万小时流式预训练 + 1.3 万小时多说话人微调 |
-| **我们** | **AMI 4 场会议** |
+| 我们（现状） | AMI 4 场会议 —— **仅用于早期探针和三臂实验起步，不是最终训练集** |
 
-**架构改对了也填不上这个差距。** → MISP-Meeting（125 h、57% 重叠、带视频）那条线应优先推进。
+数据侧剩下的只有**设计问题**：第一人称/机器人视角、人数与重叠比例分布、三轴标签定义、训练/评测切分。
+MISP-Meeting（125 h、57% 重叠、带视频）等公开集作**补充与外部对照**，不再是"不得不依赖"的救命稻草。
 
 ### 8.6 成本（按核实的结构重算）
 | 部件 | 倍数 |
@@ -487,7 +617,7 @@ VibeVoice 的消融是单调的：chunk 15→22 帧改善 cpWER 4.06 分；looka
 | projector + LLM 26 层（d=3072） | **(K+1)×** |
 
 相对 v6.1 新增的是编码器 30 层的 K× —— 635M 级，相对 4B 的 LLM 不是主要开销。
-`K ≥ 8` 的降级方案 = 状态头走共享前向（A 的路径）覆盖全部 K 脸，ASR 流只对 `state≠静默` 的脸开
+`K ≥ 8` 的降级方案 = 状态头走共享前向（A 的路径）覆盖全部 K 脸，ASR 流只对 `state≠idle` 的脸开
 （部署期优化，非论文主模型）。
 
 ### 8.7 ⚠️ 新颖性口径再收紧一档（v6.2）
@@ -521,8 +651,8 @@ VibeVoice 的消融是单调的：chunk 15→22 帧改善 cpWER 4.06 分；looka
 4. 视频 25 fps → 50 Hz 的上采样方式（重复 vs 插值，§3.4）。
 5. `E_others` 追加可见人脸集合池化表征（§3.7，已从 ⏳ 提级为 💡 建议）。
 6. 新流是否需要有界音频回放（§3.6）。
-7. LoRA r=32 vs 全微调 —— 等数据量定。
-8. 数据集方案（**MISP-Meeting 可行性优先**，§8.5）与 addressee 标签定义。
+7. LoRA r=32 vs 全微调 —— 数据与算力都不设限，由实验效果定，不由资源定。
+8. 数据采集设计（自采为主，§8.5；MISP-Meeting 等作补充/对照）与 addressee 标签定义。
 9. 评测协议对齐 **cpWER/cpCER** + Pareto 曲线（§8.3），并把 Whisper-Sidecar /
    diarization-conditioned Whisper 加为"纯音频多实例"强 baseline。
 
@@ -531,7 +661,7 @@ VibeVoice 的消融是单调的：chunk 15→22 帧改善 cpWER 4.06 分；looka
 ## 附录 · 代码锚点
 
 **X2-Turn fork**（前缀 `X2-Turn/voxtral-realtime/src/voxtral_realtime/transformers/`，只读）：
-- `modeling.py:15-23` `TURN_CLASS_IDS/NAMES` —— §4.1 热启动取的 35/37/38。
+- `modeling.py:15-23` `TURN_CLASS_IDS/NAMES` —— §4.1 热启动取的 35–40（6 行全拷）。
 - `modeling.py:37-188` `VoxtralMTP` —— 共享骨干 + 多头范式，推广为 per-face 多流多头。
 - `modeling.py:60-69` —— `vad_lm_head` 拷贝 `lm_head` 的手法。
 - `modeling.py:125-145` `train_vad_head_only` —— S1"冻骨干只训新模块"的现成实现。

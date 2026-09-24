@@ -149,12 +149,14 @@ arXiv: 2606.16731(MuVAP) · 2607.07294(MM-VAP) · 2506.03980(多模态编码器V
 
 用户选了**端到端联合融合**。放开冻结范式后，per-face 输出的自然形态：
 
-```
-mixed audio ─► [音频编码/骨干] ─► audio hidden H_a
-                                       │ keys/values
-face_1 ─►[视觉编码器]─► q_1 ─┐         │
-face_2 ─►[视觉编码器]─► q_2 ─┼─► Cross-Attn(q_k, H_a) ─► per-face 头
-face_k ─►[视觉编码器]─► q_k ─┘                         └► {静默 / 说话-incomplete / 说话-complete}_k
+```mermaid
+flowchart LR
+    MA["mixed audio"] --> BB["音频编码 / 骨干"] --> HA["audio hidden H_a"]
+    F1["face_1"] --> V1["视觉编码器"] -->|"q_1"| CA["Cross-Attn(q_k, H_a)"]
+    F2["face_2"] --> V2["视觉编码器"] -->|"q_2"| CA
+    FK["face_k"] --> VK["视觉编码器"] -->|"q_k"| CA
+    HA -->|"keys / values"| CA
+    CA --> HD["per-face 头"] --> O["静默 / 说话-incomplete / 说话-complete"]
 ```
 
 - 每张脸的视觉序列当 **query** attend 音频（视觉干它擅长的"归属"）；per-face **三态**（active 与 completeness 天然耦合）。
