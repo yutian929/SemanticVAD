@@ -67,12 +67,12 @@ flowchart LR
 
 **定义**:流式、因果(80ms/chunk)、多人同框;输入 = **多人混合音频(16kHz) + 单目 RGB**;
 对画面内每个人逐 chunk 输出 `{active · ASR · complete/incomplete · addressee(是否在对我说)}`
-(实现上状态沿用 X2-Turn 6 类,complete = `turn_end`;见 architecture §4.1)。
+(实现上状态沿用 X2-Turn 6 类,complete = `turn_end`;见 architecture §2.1)。
 **交互对象假设在画面内**(不用麦阵/DoA/朝向)。**单目 RGB 天然是机器人第一人称视角**
 → "注视/头姿朝向摄像头 ≈ 在对我说话",与输入假设自洽。
 
 > **★ 措辞放宽(2026-09-22,随架构 v6.1)**:原写"假设人一定在画面内、不做画面外"。
-> 架构已引入**常驻 `others` 流**兜住画外语音(见 [`architecture.md`](architecture.md) §2.6),
+> 架构已引入**常驻 `others` 流**兜住画外语音(见 [`architecture.md`](architecture.md) §1.8),
 > 所以正确措辞是:**要交互的人假设在画面内;画外语音不被忽略,而是显式归入 `others` 残差桶、
 > 不参与 per-face 判决**。这是**鲁棒性机制,不是新颖性轴**——论文里**不得**把它写成贡献,
 > 只在方法与限制里交代。它顺带堵掉一个必被问到的审稿问题("有人在画面外说话怎么办")。
@@ -157,9 +157,9 @@ flowchart LR
 **v6.2 为什么要两级**(2026-09-22 文献调研):多说话人 ASR 的四类主流架构
 **无一例外把说话人线索注入声学层或编码器状态**,没有一个放在编码器下游的语言模型里;
 而 v6/v6.1 恰好放在了后者。我们的噪声 gate 0.47 测的就是编码器**之后**的 hidden,
-其含义可能是"信息在到达那里之前就已被抹掉"。详见 `architecture.md` §3.0 与 §9。
+其含义可能是"信息在到达那里之前就已被抹掉"。详见 `architecture.md` §1.1 与 §7。
 
-**仍待决**(完整清单见 `architecture.md` §10):注入深度三臂实验(A/B/C,**最高优先**)、
+**仍待决**(完整清单见 `architecture.md` §8):注入深度三臂实验(A/B/C,**最高优先**)、
 视觉编码器选型、数据方案(自采设计为主,MISP-Meeting 等公开集作补充/对照)、评测协议对齐 cpWER/cpCER + Pareto 曲线。
 
 ---
@@ -180,16 +180,16 @@ flowchart LR
 
 ## 5. 待逐条细化的清单(讨论 backlog)
 
-1. ~~§5.2 判别式 是否拍板?~~ → ✅ **已拍板判别式**(architecture.md §4.2)
+1. ~~§5.2 判别式 是否拍板?~~ → ✅ **已拍板判别式**(architecture.md §2.2)
 2. ~~§5.1 "读出/ASR 解耦" + 3 态单头~~ → ✅ **状态单头已定为 X2-Turn 6 类**(2026-09-24,取代原 3 态);"解耦"降为**部署期优化**,
-   主模型走每流独立 ASR(architecture.md §4.3 / §8.6)
+   主模型走每流独立 ASR(architecture.md §2.3 / §6.6)
 3. §8.2 视觉编码器候选:AV-HuBERT vs Light-ASD/TalkNet vs 其它;检测跟踪器选型。
 4. C1/C3 如何切干净、各自独立成立的边界。
 5. 数据集方案:以**自建**为主(资源充足,规模不受限);待定的是采集设计(场景/视角/人数/重叠比例/标签定义),
    以及是否额外复用 AVCocktail(代码公开,最多 8 人)、MISP-Meeting 作补充或外部对照。
 6. 级联 baseline 各模块具体选型 + 适配 MuVAP/AV-Dialog 的方式。
 7. 恢复实验 → ✅ **已定为注入深度三臂(A/B/C)同跑**,兼作 C2 判据与架构判据
-   (architecture.md §8.1);⏳ 剩余待定 = 分档标准与标签质量升级。
+   (architecture.md §6.1);⏳ 剩余待定 = 分档标准与标签质量升级。
 8. ✅ **已核实**:per-face "is-speaking + is-done" 的 ASD 文献核实(结论见 §6)。
 9. addressee 轴:标签定义("对系统说" vs "对旁人说")、数据视角(需第一人称/机器人视角)、
    相关工作核实(多人 HRI addressee detection 已有文献 → 新颖性须落在**联合 per-face 组合**,非 addressee 单独)。
@@ -238,7 +238,7 @@ flowchart LR
    ⚠️ **2026-09-22 追加**:"多实例 + 线索条件化"已是被系统研究过的成熟范式
    ([NVIDIA 四类架构比较](https://www.alphaxiv.org/abs/2609.10265) 把它列为一类并测出它最优),
    不只是 AV-TSE 机制不新。能守住的只有**输出轴**:那四篇的输出全是 "who said what" 的转写,
-   **无一输出语义完整性**。文献依据见 `architecture.md` §9。
+   **无一输出语义完整性**。文献依据见 `architecture.md` §7。
 2. "done" = **语义完整**(§6);addressee = **仅作四轴联合的一轴**。
 3. C1↔C3 切开(数据资产 vs 协议+失败诊断),且都与 HEAR/AVCocktail 显式区分。
 
