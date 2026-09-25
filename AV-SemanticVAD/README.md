@@ -15,6 +15,7 @@
 |---|---|---|
 | [`plan/cvpr-framing.md`](plan/cvpr-framing.md) | **★ 对外定位的唯一权威**：new setting、C1/C2/C3、措辞纪律、竞品与文献核实、骨干选型 | 一直 |
 | [`plan/architecture.md`](plan/architecture.md) | **★ 模型契约的唯一权威**：输入 / 中间流程 / 输出、训练、单测 | 写模型前 |
+| [`docs/plan/dataset.md`](docs/plan/dataset.md) | 数据集格式与获取方法（讨论稿） | 讨论数据时 |
 | [`docs/code-anchors.md`](docs/code-anchors.md) | 第三方参考代码位置（含行号） | 写代码时 |
 | [`docs/server-setup.md`](docs/server-setup.md) | GPU 环境、权重、磁盘、已知坑 | 上服务器时 |
 

@@ -45,6 +45,9 @@ outputs/
 *.mkv
 *.webm
 
+# 下载的论文 PDF：只存本地，不入库
+/AV-SemanticVAD/docs/papers/
+
 # 白名单：论文与文档资产
 !AV-SemanticVAD/research/*.pdf
 !**/assets/**

@@ -230,7 +230,7 @@ flowchart LR
 | **C1 数据集** | ✅ **立得住(最稳)** | 无 AV 多人语料带逐人语义完整性标注。行为轴语料(AVCocktail/MM-F2F/TurnBench/Real-TurnTurk)、音频 attribution 基准([HEAR](https://www.alphaxiv.org/abs/2608.29120) 纯音频/AMI·ICSI/无视觉无完整性)均不撞。 |
 | **C2 模型** | 🚨 **结构不新,须改口径** | "视觉线索把某人从混音拎出"= 成熟领域 **AV-TSE/AVSE**([CueNet](https://www.alphaxiv.org/abs/2603.01530)/[Plug-and-Steer](https://www.alphaxiv.org/abs/2603.19697)/[Multi-View AVTSE](https://www.alphaxiv.org/abs/2603.07696)/[USEF-TSE](https://www.alphaxiv.org/abs/2409.02615))。**但它们输出波形,无 per-face 语义状态** → C2 新颖性改钉"任务/输出",非"架构"。 |
 | **C3 benchmark** | ✅ **立得住(随 C1)** | 须与 HEAR(音频 attribution 基准)、AVCocktail(AV 话轮测试床)区分:新在**完整性轴 + per-face + AV**,非"多人 attribution 评测"本身。 |
-| **addressee 轴** | ⚠️ **单独已被占** | 多人 addressee 是活跃任务([Structure of Address](https://www.alphaxiv.org/abs/2607.15648)、[HiBRIDGE](https://www.alphaxiv.org/abs/2609.08678))→ novelty 只在**四轴联合 per-face**,addressee 单拎不算贡献。 |
+| **addressee 轴** | ⚠️ **单独已被占** | 多人 addressee 是活跃任务([Structure of Address](https://www.alphaxiv.org/abs/2607.15648)、[HiBRIDGE](https://www.alphaxiv.org/abs/2609.08678))→ novelty 只在**四轴联合 per-face**,addressee 单拎不算贡献。**⚠️ 2026-09-25 追加**:[Talking to Me or Someone Else?](https://arxiv.org/abs/2609.14118)(MM'26)已做**在线、逐帧、第一人称**的 talk-to-me 检测,并用了语音语义(TTM 帧级 F1 75.5)→ "流式 + addressee + 语义"已被占,**须作为 addressee 轴的主要对比基线**;它**没做**语义完整性 / turn-taking 状态、ASR 输出、机器人场景。 |
 
 **总判决**:在**精确措辞**下三条贡献成立;在**宽泛措辞**下会被逐条击穿。三条必守口径:
 1. C2 = **新任务首次系统实现 + strong AV baseline**(输出 per-face 语义状态,非波形)。
