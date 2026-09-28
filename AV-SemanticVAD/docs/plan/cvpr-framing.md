@@ -166,6 +166,8 @@ flowchart LR
 
 ## 4. Baseline:模块化级联(cascade of small models)💡
 
+> 详细设计已移至 [`baseline.md`](baseline.md)(2026-09-28 起),本节保留摘要。
+
 **级联 baseline**(用多个小模型拼出同一功能,和端到端模型形成对照):
 ```mermaid
 flowchart LR
